@@ -10,7 +10,7 @@ env:
   AMP_SIZE_GB: "2"
   CLOUD_INIT_DATASOURCES: ConfigDrive
 
-  OCTAVIA_REF: ""                 # branche/tag/SHA (ex: stable/2024.1) — auto-dérivé si vide
+  OCTAVIA_REF: ""                 # auto-dérivé si vide: stable/MAJOR.MINOR
   PIN_WITH_DIB_REPOREF: "false"   # "true" => DIB_REPOREF_amphora_agent
   UPPER_CONSTRAINTS_URL: ""       # auto-dérivé si vide
 
@@ -59,53 +59,42 @@ jobs:
           else
             echo "OCTAVIA_REF=${{ env.OCTAVIA_REF }}" >> $GITHUB_ENV
           fi
-
           if [ -n "${{ github.event.inputs.pin_with_dib_reporef }}" ]; then
             echo "PIN_WITH_DIB_REPOREF=${{ github.event.inputs.pin_with_dib_reporef }}" >> $GITHUB_ENV
           else
             echo "PIN_WITH_DIB_REPOREF=${{ env.PIN_WITH_DIB_REPOREF }}" >> $GITHUB_ENV
           fi
-
           if [ -n "${{ github.event.inputs.base_os }}" ]; then
             echo "AMP_BASE_OS=${{ github.event.inputs.base_os }}" >> $GITHUB_ENV
           else
             echo "AMP_BASE_OS=${{ env.AMP_BASE_OS }}" >> $GITHUB_ENV
           fi
-
           if [ -n "${{ github.event.inputs.release_id }}" ]; then
             echo "AMP_RELEASE=${{ github.event.inputs.release_id }}" >> $GITHUB_ENV
           else
             echo "AMP_RELEASE=${{ env.AMP_RELEASE }}" >> $GITHUB_ENV
           fi
-
           if [ -n "${{ github.event.inputs.upper_constraints_url }}" ]; then
             echo "UPPER_CONSTRAINTS_URL=${{ github.event.inputs.upper_constraints_url }}" >> $GITHUB_ENV
           else
             echo "UPPER_CONSTRAINTS_URL=${{ env.UPPER_CONSTRAINTS_URL }}" >> $GITHUB_ENV
           fi
 
-      - name: Derive OCTAVIA_REF & upper-constraints if empty (from tag)
+      - name: Derive SERIES, OCTAVIA_REF & upper-constraints if empty (from tag)
         shell: bash
         run: |
-          # Si OCTAVIA_REF est vide, déduire "stable/MAJOR.MINOR" depuis le tag (version)
+          VMAJ="$(echo "${version}" | cut -d. -f1)"
+          VMIN="$(echo "${version}" | cut -d. -f2)"
+          SERIES="${VMAJ}.${VMIN}"
+          echo "SERIES=${SERIES}" >> $GITHUB_ENV
+
           if [ -z "${OCTAVIA_REF}" ]; then
-            VMAJ="$(echo "${version}" | cut -d. -f1)"
-            VMIN="$(echo "${version}" | cut -d. -f2)"
-            if [ -n "$VMAJ" ] && [ -n "$VMIN" ]; then
-              SERIES="stable/${VMAJ}.${VMIN}"
-              echo "OCTAVIA_REF=$SERIES" >> $GITHUB_ENV
-              echo "Derived OCTAVIA_REF=$SERIES from tag ${version}"
-              # Si UPPER_CONSTRAINTS_URL est vide, dériver celui de la même série
-              if [ -z "${UPPER_CONSTRAINTS_URL}" ]; then
-                URL="https://opendev.org/openstack/requirements/raw/branch/${SERIES}/upper-constraints.txt"
-                echo "UPPER_CONSTRAINTS_URL=$URL" >> $GITHUB_ENV
-                echo "Derived UPPER_CONSTRAINTS_URL=$URL"
-              fi
-            else
-              echo "WARN: Impossible de dériver OCTAVIA_REF depuis ${version}"
-            fi
-          else
-            echo "Using user-provided OCTAVIA_REF=${OCTAVIA_REF}"
+            echo "OCTAVIA_REF=stable/${SERIES}" >> $GITHUB_ENV
+            echo "Derived OCTAVIA_REF=stable/${SERIES}"
+          fi
+          if [ -z "${UPPER_CONSTRAINTS_URL}" ]; then
+            echo "UPPER_CONSTRAINTS_URL=https://opendev.org/openstack/requirements/raw/branch/stable/${SERIES}/upper-constraints.txt" >> $GITHUB_ENV
+            echo "Derived UPPER_CONSTRAINTS_URL for series ${SERIES}"
           fi
 
       - name: Install build prerequisites
@@ -120,7 +109,7 @@ jobs:
           git clone https://opendev.org/openstack/octavia.git
           cd octavia
           if [ -n "${OCTAVIA_REF}" ]; then
-            git checkout "${OCTAVIA_REF}" || echo "Info: ${OCTAVIA_REF} n'est pas une branche/tag valide dans ce clone (ok si DIB_REPOREF est utilisé)."
+            git checkout "${OCTAVIA_REF}" || echo "Info: ${OCTAVIA_REF} introuvable (ok si DIB_REPOREF est utilisé)."
           fi
 
       - name: Python venv + requirements
@@ -183,16 +172,14 @@ jobs:
             echo "";           echo "## SHA256"; sha256sum "${FINAL}"
           } > checksums.txt
 
-          cp "${FINAL}" /shared || true
-          cp checksums.txt /shared || true
+          mkdir -p /shared/${SERIES}/${version}
+          cp "${FINAL}" checksums.txt /shared/${SERIES}/${version}/
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: octavia-amphora-image
-          path: |
-            octavia/diskimage-create/amphora-*.${{ env.AMP_IMAGE_TYPE }}
-            octavia/diskimage-create/checksums.txt
+          path: /shared/${{ env.SERIES }}/${{ env.version }}/
 
   deploy:
     needs: build
@@ -202,7 +189,7 @@ jobs:
       options: --user root
     defaults:
       run:
-        shell: bash   # ⬅️ évite l'erreur 'set -o pipefail' en sh
+        shell: bash
 
     steps:
       - name: Download all artifacts
@@ -210,19 +197,37 @@ jobs:
         with:
           path: artifacts
 
-      - name: Flatten artifacts into version directory
+      - name: Flatten artifacts into deploy dir
         run: |
           set -euo pipefail
-          mkdir -p deploy/${version}
-          # Déballer le contenu de tous les sous-dossiers d'artifacts/ (supprime le niveau 'octavia-amphora-image/')
-          shopt -s nullglob
+          SERIES="$(echo "${version}" | cut -d. -f1,2)"
+          mkdir -p deploy/${SERIES}/${version}
           for d in artifacts/*; do
-            [ -d "$d" ] && cp -r "$d"/* "deploy/${version}/"
+            [ -d "$d" ] && cp -r "$d"/* "deploy/${SERIES}/${version}/"
           done
-          ls -la deploy/${version}
+          echo "SERIES=$SERIES" >> $GITHUB_ENV
+          ls -la deploy/${SERIES}/${version}
+
+          # Génère manifest.json (merge si déjà présent)
+          REPO_NAME="${{ github.event.repository.name }}"
+          BASE_URL="https://repo.openimages.cloud/$REPO_NAME"
+          MANI="deploy/manifest.json"
+          [ -f "$MANI" ] || echo '{"versions":{}}' > "$MANI"
+
+          jq --arg ver "${version}" \
+             --arg ser "${SERIES}" \
+             --arg url "$BASE_URL/${SERIES}/${version}/" \
+             --arg ref "${OCTAVIA_REF:-default}" \
+             --arg base "${AMP_BASE_OS}" \
+             --arg rel "${AMP_RELEASE}" \
+             --arg arch "${AMP_ARCH}" \
+             --arg typ  "${AMP_IMAGE_TYPE}" \
+             --arg dib  "${PIN_WITH_DIB_REPOREF}" \
+             --arg ucu  "${UPPER_CONSTRAINTS_URL:-none}" \
+             '.versions[$ver] = { "series": $ser, "url": $url, "date": (now | todate), "octavia_ref": $ref, "base_os": $base, "release": $rel, "arch": $arch, "type": $typ, "pin_with_dib_reporef": $dib, "upper_constraints_url": $ucu }' \
+             "$MANI" > "$MANI.tmp" && mv "$MANI.tmp" "$MANI"
 
       - name: Deploy to SFTP server
-        # ⚠️ On garde ta conf SSH qui fonctionne
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh
@@ -230,23 +235,33 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
 
           KEY_PATH="/github/home/.ssh/deploy_key"
-          SSH_OPTS="-i $KEY_PATH -p ${{ secrets.SFTP_PORT || 22 }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+          PORT="${{ secrets.SFTP_PORT }}"
+          if [ -z "$PORT" ]; then PORT=22; fi
+
+          SSH_OPTS="-i $KEY_PATH -p $PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
           SSH_CMD="ssh $SSH_OPTS ${{ secrets.SFTP_USERNAME }}@${{ secrets.SFTP_HOST }}"
           REPO_NAME="${{ github.event.repository.name }}"
           REMOTE_PATH="public_html/repo.openimages.cloud/$REPO_NAME"
 
+          SERIES="${SERIES}"
+          SUBVER="${version}"
+
           echo "SSH connection test"
           $SSH_CMD "echo 'SSH OK'"
 
-          $SSH_CMD "mkdir -p $REMOTE_PATH/${version}"
+          $SSH_CMD "mkdir -p $REMOTE_PATH/${SERIES}/${SUBVER}"
           rsync -avz -e "ssh $SSH_OPTS" \
-            deploy/${version}/ ${{ secrets.SFTP_USERNAME }}@${{ secrets.SFTP_HOST }}:$REMOTE_PATH/${version}/
+            deploy/${SERIES}/${SUBVER}/ ${{ secrets.SFTP_USERNAME }}@${{ secrets.SFTP_HOST }}:$REMOTE_PATH/${SERIES}/${SUBVER}/
 
-          $SSH_CMD "rm -f $REMOTE_PATH/latest"
-          $SSH_CMD "ln -sf ${version} $REMOTE_PATH/latest"
+          rsync -avz -e "ssh $SSH_OPTS" \
+            deploy/manifest.json ${{ secrets.SFTP_USERNAME }}@${{ secrets.SFTP_HOST }}:$REMOTE_PATH/manifest.json
+
+          $SSH_CMD "ln -sfn ${SUBVER} $REMOTE_PATH/${SERIES}/latest"
+          $SSH_CMD "ln -sfn ${SERIES}/${SUBVER} $REMOTE_PATH/latest"
 
           echo "✅ Deployment completed"
           echo "🌐 URLs:"
-          echo "  - Version ${version} : https://repo.openimages.cloud/$REPO_NAME/${version}/"
-          echo "  - Latest version      : https://repo.openimages.cloud/$REPO_NAME/latest/"
-
+          echo "  - This build           : https://repo.openimages.cloud/$REPO_NAME/${SERIES}/${SUBVER}/"
+          echo "  - Series latest        : https://repo.openimages.cloud/$REPO_NAME/${SERIES}/latest/"
+          echo "  - Global latest        : https://repo.openimages.cloud/$REPO_NAME/latest/"
+          echo "  - Manifest             : https://repo.openimages.cloud/$REPO_NAME/manifest.json"
