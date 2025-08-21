@@ -10,9 +10,9 @@ env:
   AMP_SIZE_GB: "2"
   CLOUD_INIT_DATASOURCES: ConfigDrive
 
-  OCTAVIA_REF: ""                 # branche/tag/SHA (ex: stable/2024.1)
+  OCTAVIA_REF: ""                 # branche/tag/SHA (ex: stable/2024.1) — auto-dérivé si vide
   PIN_WITH_DIB_REPOREF: "false"   # "true" => DIB_REPOREF_amphora_agent
-  UPPER_CONSTRAINTS_URL: ""       # ex: https://opendev.org/openstack/requirements/raw/branch/stable/2024.1/upper-constraints.txt
+  UPPER_CONSTRAINTS_URL: ""       # auto-dérivé si vide
 
 on:
   push:
@@ -54,11 +54,59 @@ jobs:
       - name: Normalize inputs to env
         shell: bash
         run: |
-          echo "OCTAVIA_REF=${{ github.event.inputs.octavia_ref || env.OCTAVIA_REF }}" >> $GITHUB_ENV
-          echo "PIN_WITH_DIB_REPOREF=${{ github.event.inputs.pin_with_dib_reporef || env.PIN_WITH_DIB_REPOREF }}" >> $GITHUB_ENV
-          echo "AMP_BASE_OS=${{ github.event.inputs.base_os || env.AMP_BASE_OS }}" >> $GITHUB_ENV
-          echo "AMP_RELEASE=${{ github.event.inputs.release_id || env.AMP_RELEASE }}" >> $GITHUB_ENV
-          echo "UPPER_CONSTRAINTS_URL=${{ github.event.inputs.upper_constraints_url || env.UPPER_CONSTRAINTS_URL }}" >> $GITHUB_ENV
+          if [ -n "${{ github.event.inputs.octavia_ref }}" ]; then
+            echo "OCTAVIA_REF=${{ github.event.inputs.octavia_ref }}" >> $GITHUB_ENV
+          else
+            echo "OCTAVIA_REF=${{ env.OCTAVIA_REF }}" >> $GITHUB_ENV
+          fi
+
+          if [ -n "${{ github.event.inputs.pin_with_dib_reporef }}" ]; then
+            echo "PIN_WITH_DIB_REPOREF=${{ github.event.inputs.pin_with_dib_reporef }}" >> $GITHUB_ENV
+          else
+            echo "PIN_WITH_DIB_REPOREF=${{ env.PIN_WITH_DIB_REPOREF }}" >> $GITHUB_ENV
+          fi
+
+          if [ -n "${{ github.event.inputs.base_os }}" ]; then
+            echo "AMP_BASE_OS=${{ github.event.inputs.base_os }}" >> $GITHUB_ENV
+          else
+            echo "AMP_BASE_OS=${{ env.AMP_BASE_OS }}" >> $GITHUB_ENV
+          fi
+
+          if [ -n "${{ github.event.inputs.release_id }}" ]; then
+            echo "AMP_RELEASE=${{ github.event.inputs.release_id }}" >> $GITHUB_ENV
+          else
+            echo "AMP_RELEASE=${{ env.AMP_RELEASE }}" >> $GITHUB_ENV
+          fi
+
+          if [ -n "${{ github.event.inputs.upper_constraints_url }}" ]; then
+            echo "UPPER_CONSTRAINTS_URL=${{ github.event.inputs.upper_constraints_url }}" >> $GITHUB_ENV
+          else
+            echo "UPPER_CONSTRAINTS_URL=${{ env.UPPER_CONSTRAINTS_URL }}" >> $GITHUB_ENV
+          fi
+
+      - name: Derive OCTAVIA_REF & upper-constraints if empty (from tag)
+        shell: bash
+        run: |
+          # Si OCTAVIA_REF est vide, déduire "stable/MAJOR.MINOR" depuis le tag (version)
+          if [ -z "${OCTAVIA_REF}" ]; then
+            VMAJ="$(echo "${version}" | cut -d. -f1)"
+            VMIN="$(echo "${version}" | cut -d. -f2)"
+            if [ -n "$VMAJ" ] && [ -n "$VMIN" ]; then
+              SERIES="stable/${VMAJ}.${VMIN}"
+              echo "OCTAVIA_REF=$SERIES" >> $GITHUB_ENV
+              echo "Derived OCTAVIA_REF=$SERIES from tag ${version}"
+              # Si UPPER_CONSTRAINTS_URL est vide, dériver celui de la même série
+              if [ -z "${UPPER_CONSTRAINTS_URL}" ]; then
+                URL="https://opendev.org/openstack/requirements/raw/branch/${SERIES}/upper-constraints.txt"
+                echo "UPPER_CONSTRAINTS_URL=$URL" >> $GITHUB_ENV
+                echo "Derived UPPER_CONSTRAINTS_URL=$URL"
+              fi
+            else
+              echo "WARN: Impossible de dériver OCTAVIA_REF depuis ${version}"
+            fi
+          else
+            echo "Using user-provided OCTAVIA_REF=${OCTAVIA_REF}"
+          fi
 
       - name: Install build prerequisites
         run: |
@@ -68,10 +116,11 @@ jobs:
 
       - name: Clone Octavia (diskimage-create.sh)
         run: |
+          set -e
           git clone https://opendev.org/openstack/octavia.git
           cd octavia
           if [ -n "${OCTAVIA_REF}" ]; then
-            git checkout "${OCTAVIA_REF}" || echo "Ref ${OCTAVIA_REF} non trouvée → on continue (DIB_REPOREF si demandé)."
+            git checkout "${OCTAVIA_REF}" || echo "Info: ${OCTAVIA_REF} n'est pas une branche/tag valide dans ce clone (ok si DIB_REPOREF est utilisé)."
           fi
 
       - name: Python venv + requirements
@@ -115,6 +164,7 @@ jobs:
             CMD+=( -g "$REF" )
           fi
 
+          echo ">>> ${CMD[*]}"
           "${CMD[@]}"
 
           REF_SAFE="${REF:-default}"
@@ -125,6 +175,7 @@ jobs:
           {
             echo "# Octavia Amphora ${version} checksums"
             echo "# Ref=${REF_SAFE} BaseOS=${AMP_BASE_OS} Release=${AMP_RELEASE} Arch=${AMP_ARCH}"
+            echo "# Constraints=${UPPER_CONSTRAINTS_URL:-none}"
             echo "# Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
             echo ""
             echo "## MD5";    md5sum "${FINAL}"
@@ -156,54 +207,8 @@ jobs:
         with:
           path: artifacts
 
-      - name: Create directory structure (+ manifest.json)
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p deploy/${version}
-          find artifacts -type f -name "amphora-*.*" -exec cp {} deploy/${version}/ \;
-          find artifacts -type f -name "checksums.txt" -exec cp {} deploy/${version}/ \;
-
-          REF_DISPLAY="${OCTAVIA_REF:-default}"
-          {
-            echo "Octavia Amphora Images - Version ${version}"
-            echo "Generated on: $(date)"
-            echo ""
-            echo "Build parameters:"
-            echo " - Base OS     : ${AMP_BASE_OS}"
-            echo " - Release ID  : ${AMP_RELEASE}"
-            echo " - Arch        : ${AMP_ARCH}"
-            echo " - Image type  : ${AMP_IMAGE_TYPE}"
-            echo " - Octavia ref : ${REF_DISPLAY}"
-            echo " - Pin via DIB : ${PIN_WITH_DIB_REPOREF}"
-            echo " - Constraints : ${UPPER_CONSTRAINTS_URL:-none}"
-          } > deploy/${version}/README.txt
-
-          REPO_NAME="${{ github.event.repository.name }}"
-          BASE_URL="https://repo.openimages.cloud/$REPO_NAME"
-          MANI_TMP="$(mktemp)"
-          if [ -f "deploy/manifest.json" ]; then
-            cp deploy/manifest.json "$MANI_TMP"
-          else
-            echo '{ "versions": {} }' > "$MANI_TMP"
-          fi
-
-          jq --arg ver "${version}" \
-             --arg url "$BASE_URL/${version}/" \
-             --arg ref "${REF_DISPLAY}" \
-             --arg base "${AMP_BASE_OS}" \
-             --arg rel "${AMP_RELEASE}" \
-             --arg arch "${AMP_ARCH}" \
-             --arg typ  "${AMP_IMAGE_TYPE}" \
-             --arg dib  "${PIN_WITH_DIB_REPOREF}" \
-             --arg ucu  "${UPPER_CONSTRAINTS_URL:-none}" \
-             '.versions[$ver] = { "url": $url, "date": (now | todate), "octavia_ref": $ref, "base_os": $base, "release": $rel, "arch": $arch, "type": $typ, "pin_with_dib_reporef": $dib, "upper_constraints_url": $ucu }' \
-             "$MANI_TMP" > deploy/manifest.json
-
-          cp deploy/manifest.json deploy/${version}/
-
       - name: Deploy to SFTP server
-        shell: bash
+        # ⚠️ On garde ta conf SSH qui fonctionne (ne change rien ici)
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh
@@ -211,9 +216,7 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
 
           KEY_PATH="/github/home/.ssh/deploy_key"
-          PORT="${{ secrets.SFTP_PORT }}"
-          if [ -z "$PORT" ]; then PORT=22; fi
-          SSH_OPTS="-i $KEY_PATH -p $PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+          SSH_OPTS="-i $KEY_PATH -p ${{ secrets.SFTP_PORT || 22 }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
           SSH_CMD="ssh $SSH_OPTS ${{ secrets.SFTP_USERNAME }}@${{ secrets.SFTP_HOST }}"
           REPO_NAME="${{ github.event.repository.name }}"
           REMOTE_PATH="public_html/repo.openimages.cloud/$REPO_NAME"
@@ -223,10 +226,7 @@ jobs:
 
           $SSH_CMD "mkdir -p $REMOTE_PATH/${version}"
           rsync -avz -e "ssh $SSH_OPTS" \
-            deploy/${version}/ ${{ secrets.SFTP_USERNAME }}@${{ secrets.SFTP_HOST }}:$REMOTE_PATH/${version}/
-
-          rsync -avz -e "ssh $SSH_OPTS" \
-            deploy/manifest.json ${{ secrets.SFTP_USERNAME }}@${{ secrets.SFTP_HOST }}:$REMOTE_PATH/manifest.json
+            artifacts/ ${{ secrets.SFTP_USERNAME }}@${{ secrets.SFTP_HOST }}:$REMOTE_PATH/${version}/
 
           $SSH_CMD "rm -f $REMOTE_PATH/latest"
           $SSH_CMD "ln -sf ${version} $REMOTE_PATH/latest"
@@ -235,4 +235,3 @@ jobs:
           echo "🌐 URLs:"
           echo "  - Version ${version} : https://repo.openimages.cloud/$REPO_NAME/${version}/"
           echo "  - Latest version      : https://repo.openimages.cloud/$REPO_NAME/latest/"
-          echo "  - Manifest            : https://repo.openimages.cloud/$REPO_NAME/manifest.json"
