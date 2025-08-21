@@ -202,15 +202,27 @@ jobs:
       options: --user root
     defaults:
       run:
-        shell: bash
+        shell: bash   # ⬅️ évite l'erreur 'set -o pipefail' en sh
+
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
 
+      - name: Flatten artifacts into version directory
+        run: |
+          set -euo pipefail
+          mkdir -p deploy/${version}
+          # Déballer le contenu de tous les sous-dossiers d'artifacts/ (supprime le niveau 'octavia-amphora-image/')
+          shopt -s nullglob
+          for d in artifacts/*; do
+            [ -d "$d" ] && cp -r "$d"/* "deploy/${version}/"
+          done
+          ls -la deploy/${version}
+
       - name: Deploy to SFTP server
-        # ⚠️ On garde ta conf SSH qui fonctionne (ne change rien ici)
+        # ⚠️ On garde ta conf SSH qui fonctionne
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh
@@ -228,7 +240,7 @@ jobs:
 
           $SSH_CMD "mkdir -p $REMOTE_PATH/${version}"
           rsync -avz -e "ssh $SSH_OPTS" \
-            artifacts/ ${{ secrets.SFTP_USERNAME }}@${{ secrets.SFTP_HOST }}:$REMOTE_PATH/${version}/
+            deploy/${version}/ ${{ secrets.SFTP_USERNAME }}@${{ secrets.SFTP_HOST }}:$REMOTE_PATH/${version}/
 
           $SSH_CMD "rm -f $REMOTE_PATH/latest"
           $SSH_CMD "ln -sf ${version} $REMOTE_PATH/latest"
@@ -237,3 +249,4 @@ jobs:
           echo "🌐 URLs:"
           echo "  - Version ${version} : https://repo.openimages.cloud/$REPO_NAME/${version}/"
           echo "  - Latest version      : https://repo.openimages.cloud/$REPO_NAME/latest/"
+
