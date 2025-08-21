@@ -13,7 +13,7 @@ env:
   CLOUD_INIT_DATASOURCES: ConfigDrive
 
   # Contrôle du "pinning" Octavia/Amphora
-  OCTAVIA_REF: ""                  # ex: stable/2024.1, 2025.1, <SHA> ; vide => branche par défaut
+  OCTAVIA_REF: ""                  # ex: stable/2024.1, 2025.1, <SHA> ; vide => dérivé du tag ou 'master'
   PIN_WITH_DIB_REPOREF: "false"    # "true" => DIB_REPOREF_amphora_agent=<ref> (commit/tag exact)
   UPPER_CONSTRAINTS_URL: ""        # ex: https://opendev.org/openstack/requirements/raw/branch/stable/2024.1/upper-constraints.txt
 
@@ -58,9 +58,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Normalisation des inputs (pas de "||" dans les expressions)
-      - name: Normalize inputs to env
+      # 🔁 Normalisation + AUTO-DÉDUCTION de la série stable depuis le tag
+      - name: Normalize inputs to env (auto-derive Octavia series from tag)
         run: |
+          set -euo pipefail
+
+          # 1) Inputs -> env (si fournis)
           if [ -n "${{ github.event.inputs.octavia_ref }}" ]; then
             echo "OCTAVIA_REF=${{ github.event.inputs.octavia_ref }}" >> $GITHUB_ENV
           else
@@ -89,6 +92,36 @@ jobs:
             echo "UPPER_CONSTRAINTS_URL=${{ github.event.inputs.upper_constraints_url }}" >> $GITHUB_ENV
           else
             echo "UPPER_CONSTRAINTS_URL=${{ env.UPPER_CONSTRAINTS_URL }}" >> $GITHUB_ENV
+          fi
+
+          # 2) AUTO-DERIVE de la série stable/MAJ.MIN depuis le tag "version" si OCTAVIA_REF est vide
+          #    Exemples acceptés : 2024.1.1 -> série=2024.1 ; 2024.1 -> série=2024.1
+          CUR_REF="${OCTAVIA_REF:-}"
+          if [ -z "$CUR_REF" ]; then
+            VMAJ="$(printf '%s' "${version}" | awk -F. '{print $1}')"
+            VMIN="$(printf '%s' "${version}" | awk -F. '{print $2}')"
+            if [[ "$VMAJ" =~ ^[0-9]+$ && "$VMIN" =~ ^[0-9]+$ ]]; then
+              SERIES="${VMAJ}.${VMIN}"
+              DERIVED_REF="stable/${SERIES}"
+              echo "OCTAVIA_REF=${DERIVED_REF}" >> $GITHUB_ENV
+              echo "🧠 Derived OCTAVIA_REF=${DERIVED_REF} from tag ${version}"
+            else
+              echo "ℹ️ Unable to derive stable series from tag '${version}', leaving OCTAVIA_REF empty (master)."
+            fi
+          fi
+
+          # 3) AUTO-DERIVE upper-constraints si vide et si on a une série
+          #    e.g. https://opendev.org/openstack/requirements/raw/branch/stable/2024.1/upper-constraints.txt
+          #    Re-lire OCTAVIA_REF après étape 2)
+          . $GITHUB_ENV || true
+          if [ -z "${UPPER_CONSTRAINTS_URL:-}" ]; then
+            REF_TO_CHECK="${OCTAVIA_REF:-}"
+            if [[ "$REF_TO_CHECK" =~ ^stable/[0-9]+\.[0-9]+$ ]]; then
+              SERIES_ONLY="${REF_TO_CHECK#stable/}"
+              AUTO_UC="https://opendev.org/openstack/requirements/raw/branch/stable/${SERIES_ONLY}/upper-constraints.txt"
+              echo "UPPER_CONSTRAINTS_URL=${AUTO_UC}" >> $GITHUB_ENV
+              echo "🧠 Derived UPPER_CONSTRAINTS_URL=${AUTO_UC}"
+            fi
           fi
 
       - name: Install build prerequisites
