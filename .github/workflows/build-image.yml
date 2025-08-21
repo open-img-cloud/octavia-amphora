@@ -1,7 +1,7 @@
 name: build_amphora
 
 env:
-  # Tag git déclencheur (ex: 2024.1.2) – utilisé pour nommer la sous-version
+  # Tag git déclencheur (ex: 2024.1.2) – utilisé comme sous-version
   version: ${{ github.ref_name }}
 
   # Paramètres par défaut Amphora
@@ -58,7 +58,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Normalisation des inputs sans utiliser || dans les expressions
+      # Normalisation des inputs (pas de "||" dans les expressions)
       - name: Normalize inputs to env
         run: |
           if [ -n "${{ github.event.inputs.octavia_ref }}" ]; then
@@ -117,7 +117,6 @@ jobs:
           pip install -r requirements.txt
 
       - name: Build Amphora image (diskimage-create.sh)
-        shell: bash
         working-directory: octavia/diskimage-create
         env:
           CLOUD_INIT_DATASOURCES: ${{ env.CLOUD_INIT_DATASOURCES }}
@@ -244,7 +243,7 @@ jobs:
           # --- Dossiers de publication ---
           mkdir -p "deploy/${SERIES}/${SUBVER}"
 
-          # Déplacer les artefacts dans le sous-dossier
+          # Copier les artefacts dans le sous-dossier
           find artifacts -type f -name "amphora-*.*"   -exec cp {} "deploy/${SERIES}/${SUBVER}/" \;
           find artifacts -type f -name "checksums.txt" -exec cp {} "deploy/${SERIES}/${SUBVER}/" \;
 
@@ -313,13 +312,19 @@ jobs:
           cat "$MANI"
 
       - name: Deploy to SFTP server (series + global latest by max series)
+        env:
+          SFTP_USERNAME: ${{ secrets.SFTP_USERNAME }}
+          SFTP_HOST: ${{ secrets.SFTP_HOST }}
+          SFTP_PRIVATE_KEY: ${{ secrets.SFTP_PRIVATE_KEY }}
+          SFTP_PORT: ${{ secrets.SFTP_PORT }}
         run: |
           set -euo pipefail
 
-          : "${{ secrets.SFTP_USERNAME?Missing SFTP_USERNAME }}"
-          : "${{ secrets.SFTP_HOST?Missing SFTP_HOST }}"
-          : "${{ secrets.SFTP_PRIVATE_KEY?Missing SFTP_PRIVATE_KEY }}"
-          PORT="${{ secrets.SFTP_PORT || '22' }}"
+          # --- Validate required secrets (now in env) ---
+          : "${SFTP_USERNAME:?Missing SFTP_USERNAME}"
+          : "${SFTP_HOST:?Missing SFTP_HOST}"
+          : "${SFTP_PRIVATE_KEY:?Missing SFTP_PRIVATE_KEY}"
+          PORT="${SFTP_PORT:-22}"
 
           # Re-calc série/sous-version
           VMAJ="$(printf '%s' "$version" | awk -F. '{print $1}')"
@@ -333,14 +338,15 @@ jobs:
             SUBVER="${version}"
           fi
 
+          # SSH config
           mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.SFTP_PRIVATE_KEY }}" | tr -d '\r' > ~/.ssh/deploy_key
+          printf '%s\n' "${SFTP_PRIVATE_KEY}" | tr -d '\r' > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
 
           cat > ~/.ssh/config <<EOF
           Host target
-            HostName ${{ secrets.SFTP_HOST }}
-            User ${{ secrets.SFTP_USERNAME }}
+            HostName ${SFTP_HOST}
+            User ${SFTP_USERNAME}
             Port ${PORT}
             IdentityFile ~/.ssh/deploy_key
             StrictHostKeyChecking no
