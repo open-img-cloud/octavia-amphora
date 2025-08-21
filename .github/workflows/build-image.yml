@@ -1,34 +1,30 @@
 name: build_amphora
 
 env:
-  # Version (répertoire publié & suffixe artefacts) — par défaut le tag git qui déclenche le workflow
   version: ${{ github.ref_name }}
 
-  # Paramètres par défaut pour l'image Amphora
-  AMP_BASE_OS: ubuntu-minimal        # ubuntu-minimal | rocky | fedora | centos-minimal | rhel
-  AMP_RELEASE: noble                 # ex: noble, 9-stream
-  AMP_ARCH: amd64                    # amd64 | aarch64 | ppc64le | armhf
-  AMP_IMAGE_TYPE: qcow2              # qcow2 | raw | tar | vhd
-  AMP_SIZE_GB: "2"                   # taille en Go
+  AMP_BASE_OS: ubuntu-minimal
+  AMP_RELEASE: noble
+  AMP_ARCH: amd64
+  AMP_IMAGE_TYPE: qcow2
+  AMP_SIZE_GB: "2"
   CLOUD_INIT_DATASOURCES: ConfigDrive
 
-  # Contrôle du "pinning" Octavia/Amphora
-  OCTAVIA_REF: ""                    # branche/tag/SHA (ex: stable/2024.2, 2025.1, 3a1b2c7) ; vide => défaut repo
-  PIN_WITH_DIB_REPOREF: "false"      # "true" => force DIB_REPOREF_amphora_agent (commit/tag exact)
-  UPPER_CONSTRAINTS_URL: ""          # ex: https://opendev.org/openstack/requirements/raw/branch/stable/2024.2/upper-constraints.txt
+  OCTAVIA_REF: ""                 # branche/tag/SHA (ex: stable/2024.1)
+  PIN_WITH_DIB_REPOREF: "false"   # "true" => DIB_REPOREF_amphora_agent
+  UPPER_CONSTRAINTS_URL: ""       # ex: https://opendev.org/openstack/requirements/raw/branch/stable/2024.1/upper-constraints.txt
 
 on:
   push:
-    tags:
-      - '*'
+    tags: ['*']
   workflow_dispatch:
     inputs:
       octavia_ref:
-        description: "Branche/tag/SHA Octavia (ex: stable/2024.2, 2025.1, 3a1b2c7)"
+        description: "Branche/tag/SHA Octavia (ex: stable/2024.1)"
         required: false
         default: ""
       pin_with_dib_reporef:
-        description: "Forcer un commit/tag exact via DIB_REPOREF_amphora_agent (true/false)"
+        description: "Forcer DIB_REPOREF_amphora_agent (true/false)"
         required: false
         default: "false"
       base_os:
@@ -40,15 +36,13 @@ on:
         required: false
         default: "noble"
       upper_constraints_url:
-        description: "URL upper-constraints.txt (optionnel, pour reproductibilité)"
+        description: "URL upper-constraints.txt (optionnel)"
         required: false
         default: ""
 
 jobs:
   build:
     runs-on: [self-hosted, Linux, kvm]
-
-    # ✅ Build en environnement conteneurisé (Diskimage-Builder requiert des loop devices → --privileged)
     container:
       image: ubuntu:24.04
       options: --privileged --volume /tmp:/shared
@@ -57,13 +51,44 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Apply workflow_dispatch inputs to env
+      # ⚠️ Normalisation sans utiliser || dans les expressions
+      - name: Normalize inputs to env
+        shell: bash
         run: |
-          echo "OCTAVIA_REF=${{ github.event.inputs.octavia_ref || env.OCTAVIA_REF }}" >> $GITHUB_ENV
-          echo "PIN_WITH_DIB_REPOREF=${{ github.event.inputs.pin_with_dib_reporef || env.PIN_WITH_DIB_REPOREF }}" >> $GITHUB_ENV
-          echo "AMP_BASE_OS=${{ github.event.inputs.base_os || env.AMP_BASE_OS }}" >> $GITHUB_ENV
-          echo "AMP_RELEASE=${{ github.event.inputs.release_id || env.AMP_RELEASE }}" >> $GITHUB_ENV
-          echo "UPPER_CONSTRAINTS_URL=${{ github.event.inputs.upper_constraints_url || env.UPPER_CONSTRAINTS_URL }}" >> $GITHUB_ENV
+          # OCTAVIA_REF
+          if [ -n "${{ github.event.inputs.octavia_ref }}" ]; then
+            echo "OCTAVIA_REF=${{ github.event.inputs.octavia_ref }}" >> $GITHUB_ENV
+          else
+            echo "OCTAVIA_REF=${{ env.OCTAVIA_REF }}" >> $GITHUB_ENV
+          fi
+
+          # PIN_WITH_DIB_REPOREF
+          if [ -n "${{ github.event.inputs.pin_with_dib_reporef }}" ]; then
+            echo "PIN_WITH_DIB_REPOREF=${{ github.event.inputs.pin_with_dib_reporef }}" >> $GITHUB_ENV
+          else
+            echo "PIN_WITH_DIB_REPOREF=${{ env.PIN_WITH_DIB_REPOREF }}" >> $GITHUB_ENV
+          fi
+
+          # AMP_BASE_OS
+          if [ -n "${{ github.event.inputs.base_os }}" ]; then
+            echo "AMP_BASE_OS=${{ github.event.inputs.base_os }}" >> $GITHUB_ENV
+          else
+            echo "AMP_BASE_OS=${{ env.AMP_BASE_OS }}" >> $GITHUB_ENV
+          fi
+
+          # AMP_RELEASE
+          if [ -n "${{ github.event.inputs.release_id }}" ]; then
+            echo "AMP_RELEASE=${{ github.event.inputs.release_id }}" >> $GITHUB_ENV
+          else
+            echo "AMP_RELEASE=${{ env.AMP_RELEASE }}" >> $GITHUB_ENV
+          fi
+
+          # UPPER_CONSTRAINTS_URL
+          if [ -n "${{ github.event.inputs.upper_constraints_url }}" ]; then
+            echo "UPPER_CONSTRAINTS_URL=${{ github.event.inputs.upper_constraints_url }}" >> $GITHUB_ENV
+          else
+            echo "UPPER_CONSTRAINTS_URL=${{ env.UPPER_CONSTRAINTS_URL }}" >> $GITHUB_ENV
+          fi
 
       - name: Install build prerequisites
         run: |
@@ -71,13 +96,13 @@ jobs:
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             qemu-utils git kpartx debootstrap python3-venv python3-pip ca-certificates jq curl xz-utils e2fsprogs sudo
 
-      - name: Clone Octavia (source of diskimage-create.sh)
+      - name: Clone Octavia (diskimage-create.sh)
         run: |
+          set -e
           git clone https://opendev.org/openstack/octavia.git
           cd octavia
-          if [ -n "${{ env.OCTAVIA_REF }}" ]; then
-            # Si la ref est une branche/tag reconnu par git, on la checkout (sinon on continuera et on utilisera DIB_REPOREF)
-            git checkout "${{ env.OCTAVIA_REF }}" || echo "Ref not a branch/tag here; will use DIB_REPOREF if requested."
+          if [ -n "${OCTAVIA_REF}" ]; then
+            git checkout "${OCTAVIA_REF}" || echo "Info: ${OCTAVIA_REF} n'est pas une branche/tag dans ce clone; on continuera (DIB_REPOREF si demandé)."
           fi
 
       - name: Python venv + requirements (diskimage-create)
@@ -92,34 +117,33 @@ jobs:
         working-directory: octavia/diskimage-create
         env:
           CLOUD_INIT_DATASOURCES: ${{ env.CLOUD_INIT_DATASOURCES }}
-          # Optionnel : pinner les dépendances OpenStack pour une série donnée
           DIB_REPOLOCATION_upper_constraints: ${{ env.UPPER_CONSTRAINTS_URL }}
         run: |
           set -euo pipefail
           . .venv/bin/activate
           chmod +x ./diskimage-create.sh
 
-          REF="${{ env.OCTAVIA_REF }}"
-          USE_DIB_REPOREF="${{ env.PIN_WITH_DIB_REPOREF }}"
+          REF="${OCTAVIA_REF}"
+          USE_DIB_REPOREF="${PIN_WITH_DIB_REPOREF}"
 
-          # Si on veut pinner un commit/tag précis de l'amphora-agent : DIB_REPOREF outrepasse -g
+          # Pin exact via DIB_REPOREF (outrepasse -g)
           if [ -n "$REF" ] && [ "$USE_DIB_REPOREF" = "true" ]; then
             export DIB_REPOREF_amphora_agent="$REF"
             echo "Pin via DIB_REPOREF_amphora_agent=$REF"
           fi
 
-          OUTPUT_BASENAME="amphora-${{ env.AMP_ARCH }}-haproxy"
-          OUTFILE="${OUTPUT_BASENAME}.${{ env.AMP_IMAGE_TYPE }}"
+          OUTPUT_BASENAME="amphora-${AMP_ARCH}-haproxy"
+          OUTFILE="${OUTPUT_BASENAME}.${AMP_IMAGE_TYPE}"
 
           CMD=( ./diskimage-create.sh
-                -i "${{ env.AMP_BASE_OS }}"
-                -d "${{ env.AMP_RELEASE }}"
-                -a "${{ env.AMP_ARCH }}"
-                -t "${{ env.AMP_IMAGE_TYPE }}"
-                -s "${{ env.AMP_SIZE_GB }}"
+                -i "${AMP_BASE_OS}"
+                -d "${AMP_RELEASE}"
+                -a "${AMP_ARCH}"
+                -t "${AMP_IMAGE_TYPE}"
+                -s "${AMP_SIZE_GB}"
                 -o "${OUTPUT_BASENAME}" )
 
-          # Si on n'utilise pas DIB_REPOREF, on passe -g (branche/série)
+          # Pin de série/branche
           if [ -n "$REF" ] && [ "$USE_DIB_REPOREF" != "true" ]; then
             CMD+=( -g "$REF" )
           fi
@@ -127,14 +151,15 @@ jobs:
           echo ">>> Running: ${CMD[*]}"
           "${CMD[@]}"
 
-          # Suffixer le fichier avec la ref (sanitisée) + version (tag git qui a déclenché)
-          REF_SAFE=$(printf '%s' "${REF:-default}" | tr -c 'A-Za-z0-9._-/' '_' | sed 's|/|_|g')
-          FINAL="amphora-${{ env.AMP_ARCH }}-haproxy-${REF_SAFE}-${{ env.version }}.${{ env.AMP_IMAGE_TYPE }}"
+          # Suffixes propres sans expressions ||
+          REF_SAFE="${REF:-default}"
+          REF_SAFE="${REF_SAFE//\//_}"
+          FINAL="amphora-${AMP_ARCH}-haproxy-${REF_SAFE}-${version}.${AMP_IMAGE_TYPE}"
           mv "${OUTFILE}" "${FINAL}"
 
           {
-            echo "# Octavia Amphora ${{ env.version }} checksums"
-            echo "# Ref=${REF:-default} BaseOS=${{ env.AMP_BASE_OS }} Release=${{ env.AMP_RELEASE }} Arch=${{ env.AMP_ARCH }}"
+            echo "# Octavia Amphora ${version} checksums"
+            echo "# Ref=${REF:-default} BaseOS=${AMP_BASE_OS} Release=${AMP_RELEASE} Arch=${AMP_ARCH}"
             echo "# Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
             echo ""
             echo "## MD5";    md5sum "${FINAL}"
@@ -142,7 +167,6 @@ jobs:
             echo "";           echo "## SHA256"; sha256sum "${FINAL}"
           } > checksums.txt
 
-          # Copies utiles côté runner hôte (optionnel)
           cp "${FINAL}" /shared || true
           cp checksums.txt /shared || true
 
@@ -159,7 +183,6 @@ jobs:
   deploy:
     needs: build
     runs-on: [self-hosted, Linux, kvm]
-
     container:
       image: ghcr.io/net-architect-cloud/docker-scp-gateway:latest
       options: --user root
@@ -171,32 +194,33 @@ jobs:
           path: artifacts
 
       - name: Create directory structure (+ manifest.json)
+        shell: bash
         run: |
           set -euo pipefail
-          mkdir -p deploy/${{ env.version }}
+          mkdir -p deploy/${version}
 
-          find artifacts -type f -name "amphora-*.*" -exec cp {} deploy/${{ env.version }}/ \;
-          find artifacts -type f -name "checksums.txt" -exec cp {} deploy/${{ env.version }}/ \;
+          find artifacts -type f -name "amphora-*.*" -exec cp {} deploy/${version}/ \;
+          find artifacts -type f -name "checksums.txt" -exec cp {} deploy/${version}/ \;
 
-          # README
+          REF_DISPLAY="${OCTAVIA_REF:-default}"
+
           {
-            echo "Octavia Amphora Images - Version ${{ env.version }}"
+            echo "Octavia Amphora Images - Version ${version}"
             echo "Generated on: $(date)"
             echo ""
             echo "Build parameters:"
-            echo " - Base OS     : ${{ env.AMP_BASE_OS }}"
-            echo " - Release ID  : ${{ env.AMP_RELEASE }}"
-            echo " - Arch        : ${{ env.AMP_ARCH }}"
-            echo " - Image type  : ${{ env.AMP_IMAGE_TYPE }}"
-            echo " - Octavia ref : ${{ env.OCTAVIA_REF || 'default' }}"
-            echo " - Pin via DIB : ${{ env.PIN_WITH_DIB_REPOREF }}"
-            echo " - Constraints : ${{ env.UPPER_CONSTRAINTS_URL || 'none' }}"
+            echo " - Base OS     : ${AMP_BASE_OS}"
+            echo " - Release ID  : ${AMP_RELEASE}"
+            echo " - Arch        : ${AMP_ARCH}"
+            echo " - Image type  : ${AMP_IMAGE_TYPE}"
+            echo " - Octavia ref : ${REF_DISPLAY}"
+            echo " - Pin via DIB : ${PIN_WITH_DIB_REPOREF}"
+            echo " - Constraints : ${UPPER_CONSTRAINTS_URL:-none}"
             echo ""
             echo "Available files:"
             ls -la
-          } > deploy/${{ env.version }}/README.txt
+          } > deploy/${version}/README.txt
 
-          # manifest.json (historique cumulé)
           REPO_NAME="${{ github.event.repository.name }}"
           BASE_URL="https://repo.openimages.cloud/$REPO_NAME"
           MANI_TMP="$(mktemp)"
@@ -206,20 +230,19 @@ jobs:
             echo '{ "versions": {} }' > "$MANI_TMP"
           fi
 
-          # Ajouter/mettre à jour l’entrée de la version courante
-          jq --arg ver "${{ env.version }}" \
-             --arg url "$BASE_URL/${{ env.version }}/" \
-             --arg ref "${{ env.OCTAVIA_REF || "default" }}" \
-             --arg base "${{ env.AMP_BASE_OS }}" \
-             --arg rel "${{ env.AMP_RELEASE }}" \
-             --arg arch "${{ env.AMP_ARCH }}" \
-             --arg typ  "${{ env.AMP_IMAGE_TYPE }}" \
-             --arg dib  "${{ env.PIN_WITH_DIB_REPOREF }}" \
-             --arg ucu  "${{ env.UPPER_CONSTRAINTS_URL || "none" }}" \
+          jq --arg ver "${version}" \
+             --arg url "$BASE_URL/${version}/" \
+             --arg ref "${REF_DISPLAY}" \
+             --arg base "${AMP_BASE_OS}" \
+             --arg rel "${AMP_RELEASE}" \
+             --arg arch "${AMP_ARCH}" \
+             --arg typ  "${AMP_IMAGE_TYPE}" \
+             --arg dib  "${PIN_WITH_DIB_REPOREF}" \
+             --arg ucu  "${UPPER_CONSTRAINTS_URL:-none}" \
              '.versions[$ver] = { "url": $url, "date": (now | todate), "octavia_ref": $ref, "base_os": $base, "release": $rel, "arch": $arch, "type": $typ, "pin_with_dib_reporef": $dib, "upper_constraints_url": $ucu }' \
              "$MANI_TMP" > deploy/manifest.json
 
-          cp deploy/manifest.json deploy/${{ env.version }}/
+          cp deploy/manifest.json deploy/${version}/
 
       - name: Deploy to SFTP server
         run: |
@@ -237,21 +260,19 @@ jobs:
           echo "SSH connection test"
           $SSH_CMD "echo 'SSH OK'"
 
-          # Pousser la version
-          $SSH_CMD "mkdir -p $REMOTE_PATH/${{ env.version }}"
+          $SSH_CMD "mkdir -p $REMOTE_PATH/${version}"
           rsync -avz -e "ssh $SSH_OPTS" \
-            deploy/${{ env.version }}/ ${{ secrets.SFTP_USERNAME }}@${{ secrets.SFTP_HOST }}:$REMOTE_PATH/${{ env.version }}/
+            deploy/${version}/ ${{ secrets.SFTP_USERNAME }}@${{ secrets.SFTP_HOST }}:$REMOTE_PATH/${version}/
 
-          # Mettre à jour manifest.json racine + lien latest
           rsync -avz -e "ssh $SSH_OPTS" \
             deploy/manifest.json ${{ secrets.SFTP_USERNAME }}@${{ secrets.SFTP_HOST }}:$REMOTE_PATH/manifest.json
 
           $SSH_CMD "rm -f $REMOTE_PATH/latest"
-          $SSH_CMD "ln -sf ${{ env.version }} $REMOTE_PATH/latest"
+          $SSH_CMD "ln -sf ${version} $REMOTE_PATH/latest"
 
           echo "✅ Deployment completed"
           echo "🌐 URLs:"
-          echo "  - Version ${{ env.version }} : https://repo.openimages.cloud/$REPO_NAME/${{ env.version }}/"
-          echo "  - Latest version             : https://repo.openimages.cloud/$REPO_NAME/latest/"
-          echo "  - Manifest                   : https://repo.openimages.cloud/$REPO_NAME/manifest.json"
+          echo "  - Version ${version} : https://repo.openimages.cloud/$REPO_NAME/${version}/"
+          echo "  - Latest version      : https://repo.openimages.cloud/$REPO_NAME/latest/"
+          echo "  - Manifest            : https://repo.openimages.cloud/$REPO_NAME/manifest.json"
 
