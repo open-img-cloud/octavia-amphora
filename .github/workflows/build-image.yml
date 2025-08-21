@@ -1,8 +1,10 @@
 name: build_amphora
 
 env:
+  # Tag git déclencheur (ex: 2024.1.2) – utilisé pour nommer la sous-version
   version: ${{ github.ref_name }}
 
+  # Paramètres par défaut Amphora
   AMP_BASE_OS: ubuntu-minimal
   AMP_RELEASE: noble
   AMP_ARCH: amd64
@@ -10,9 +12,10 @@ env:
   AMP_SIZE_GB: "2"
   CLOUD_INIT_DATASOURCES: ConfigDrive
 
-  OCTAVIA_REF: ""                 # branche/tag/SHA (ex: stable/2024.1)
-  PIN_WITH_DIB_REPOREF: "false"   # "true" => DIB_REPOREF_amphora_agent
-  UPPER_CONSTRAINTS_URL: ""       # ex: https://opendev.org/openstack/requirements/raw/branch/stable/2024.1/upper-constraints.txt
+  # Contrôle du "pinning" Octavia/Amphora
+  OCTAVIA_REF: ""                  # ex: stable/2024.1, 2025.1, <SHA> ; vide => branche par défaut
+  PIN_WITH_DIB_REPOREF: "false"    # "true" => DIB_REPOREF_amphora_agent=<ref> (commit/tag exact)
+  UPPER_CONSTRAINTS_URL: ""        # ex: https://opendev.org/openstack/requirements/raw/branch/stable/2024.1/upper-constraints.txt
 
 on:
   push:
@@ -45,6 +48,7 @@ jobs:
     runs-on: [self-hosted, Linux, kvm]
     container:
       image: ubuntu:24.04
+      # Diskimage-Builder a besoin des loop devices → --privileged
       options: --privileged --volume /tmp:/shared
     defaults:
       run:
@@ -54,39 +58,33 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ⚠️ Normalisation sans utiliser || dans les expressions
+      # Normalisation des inputs sans utiliser || dans les expressions
       - name: Normalize inputs to env
-        shell: bash
         run: |
-          # OCTAVIA_REF
           if [ -n "${{ github.event.inputs.octavia_ref }}" ]; then
             echo "OCTAVIA_REF=${{ github.event.inputs.octavia_ref }}" >> $GITHUB_ENV
           else
             echo "OCTAVIA_REF=${{ env.OCTAVIA_REF }}" >> $GITHUB_ENV
           fi
 
-          # PIN_WITH_DIB_REPOREF
           if [ -n "${{ github.event.inputs.pin_with_dib_reporef }}" ]; then
             echo "PIN_WITH_DIB_REPOREF=${{ github.event.inputs.pin_with_dib_reporef }}" >> $GITHUB_ENV
           else
             echo "PIN_WITH_DIB_REPOREF=${{ env.PIN_WITH_DIB_REPOREF }}" >> $GITHUB_ENV
           fi
 
-          # AMP_BASE_OS
           if [ -n "${{ github.event.inputs.base_os }}" ]; then
             echo "AMP_BASE_OS=${{ github.event.inputs.base_os }}" >> $GITHUB_ENV
           else
             echo "AMP_BASE_OS=${{ env.AMP_BASE_OS }}" >> $GITHUB_ENV
           fi
 
-          # AMP_RELEASE
           if [ -n "${{ github.event.inputs.release_id }}" ]; then
             echo "AMP_RELEASE=${{ github.event.inputs.release_id }}" >> $GITHUB_ENV
           else
             echo "AMP_RELEASE=${{ env.AMP_RELEASE }}" >> $GITHUB_ENV
           fi
 
-          # UPPER_CONSTRAINTS_URL
           if [ -n "${{ github.event.inputs.upper_constraints_url }}" ]; then
             echo "UPPER_CONSTRAINTS_URL=${{ github.event.inputs.upper_constraints_url }}" >> $GITHUB_ENV
           else
@@ -95,28 +93,31 @@ jobs:
 
       - name: Install build prerequisites
         run: |
+          set -euo pipefail
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             qemu-utils git kpartx debootstrap python3-venv python3-pip ca-certificates jq curl xz-utils e2fsprogs sudo
 
       - name: Clone Octavia (diskimage-create.sh)
         run: |
-          set -e
+          set -euo pipefail
           git clone https://opendev.org/openstack/octavia.git
           cd octavia
           if [ -n "${OCTAVIA_REF}" ]; then
-            git checkout "${OCTAVIA_REF}" || echo "Info: ${OCTAVIA_REF} n'est pas une branche/tag dans ce clone; on continuera (DIB_REPOREF si demandé)."
+            git checkout "${OCTAVIA_REF}" || echo "Info: ${OCTAVIA_REF} n'est pas une branche/tag ici; DIB_REPOREF peut épingler l'agent."
           fi
 
       - name: Python venv + requirements (diskimage-create)
         working-directory: octavia/diskimage-create
         run: |
+          set -euo pipefail
           python3 -m venv .venv
           . .venv/bin/activate
           pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Build Amphora image (diskimage-create.sh)
+        shell: bash
         working-directory: octavia/diskimage-create
         env:
           CLOUD_INIT_DATASOURCES: ${{ env.CLOUD_INIT_DATASOURCES }}
@@ -146,7 +147,7 @@ jobs:
                 -s "${AMP_SIZE_GB}"
                 -o "${OUTPUT_BASENAME}" )
 
-          # Pin de série/branche
+          # Pin de série/branche (si pas de DIB_REPOREF)
           if [ -n "$REF" ] && [ "$USE_DIB_REPOREF" != "true" ]; then
             CMD+=( -g "$REF" )
           fi
@@ -154,7 +155,7 @@ jobs:
           echo ">>> Running: ${CMD[*]}"
           "${CMD[@]}"
 
-          # Suffixes propres sans expressions ||
+          # Renommage final: ref + tag déclencheur
           REF_SAFE="${REF:-default}"
           REF_SAFE="${REF_SAFE//\//_}"
           FINAL="amphora-${AMP_ARCH}-haproxy-${REF_SAFE}-${version}.${AMP_IMAGE_TYPE}"
@@ -170,6 +171,7 @@ jobs:
             echo "";           echo "## SHA256"; sha256sum "${FINAL}"
           } > checksums.txt
 
+          # Copies utiles côté runner hôte (optionnel)
           cp "${FINAL}" /shared || true
           cp checksums.txt /shared || true
 
@@ -199,19 +201,58 @@ jobs:
         with:
           path: artifacts
 
-      - name: Create directory structure (+ manifest.json)
-        shell: bash
+      # jq peut ne pas être présent dans l'image de déploiement
+      - name: Ensure jq is available
         run: |
           set -euo pipefail
-          mkdir -p deploy/${version}
+          if command -v jq >/dev/null 2>&1; then
+            jq --version
+          else
+            echo "Installing jq (static binary)…"
+            arch="$(uname -m)"
+            case "$arch" in
+              x86_64) jq_arch="amd64" ;;
+              aarch64|arm64) jq_arch="arm64" ;;
+              *) jq_arch="amd64" ;;
+            esac
+            curl -fsSL -o /usr/local/bin/jq "https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-${jq_arch}"
+            chmod +x /usr/local/bin/jq
+            jq --version
+          fi
 
-          find artifacts -type f -name "amphora-*.*" -exec cp {} deploy/${version}/ \;
-          find artifacts -type f -name "checksums.txt" -exec cp {} deploy/${version}/ \;
+      - name: Create series tree (+ manifest.json)
+        run: |
+          set -euo pipefail
 
+          # --- Calcul série/sous-version ---
+          # version = tag Git ex: 2024.1.2
+          VMAJ="$(printf '%s' "$version" | awk -F. '{print $1}')"
+          VMIN="$(printf '%s' "$version" | awk -F. '{print $2}')"
+          VPATCH="$(printf '%s' "$version" | awk -F. '{print $3}')"
+
+          if [[ -n "${VMAJ}" && -n "${VMIN}" && -n "${VPATCH}" ]]; then
+            SERIES="${VMAJ}.${VMIN}"            # 2024.1
+            SUBVER="${VMAJ}.${VMIN}.${VPATCH}"  # 2024.1.2
+          else
+            SERIES="${version}"                  # 2024.1
+            SUBVER="${version}"                  # 2024.1
+          fi
+
+          echo "Series      : ${SERIES}"
+          echo "Sub-version : ${SUBVER}"
+
+          # --- Dossiers de publication ---
+          mkdir -p "deploy/${SERIES}/${SUBVER}"
+
+          # Déplacer les artefacts dans le sous-dossier
+          find artifacts -type f -name "amphora-*.*"   -exec cp {} "deploy/${SERIES}/${SUBVER}/" \;
+          find artifacts -type f -name "checksums.txt" -exec cp {} "deploy/${SERIES}/${SUBVER}/" \;
+
+          # README
           REF_DISPLAY="${OCTAVIA_REF:-default}"
-
           {
-            echo "Octavia Amphora Images - Version ${version}"
+            echo "Octavia Amphora Images - Version ${SUBVER}"
+            echo "Series: ${SERIES}"
             echo "Generated on: $(date)"
             echo ""
             echo "Build parameters:"
@@ -225,60 +266,137 @@ jobs:
             echo ""
             echo "Available files:"
             ls -la
-          } > deploy/${version}/README.txt
+          } > "deploy/${SERIES}/${SUBVER}/README.txt"
 
+          # --- manifest.json (par série + sous-versions) ---
           REPO_NAME="${{ github.event.repository.name }}"
           BASE_URL="https://repo.openimages.cloud/$REPO_NAME"
-          MANI_TMP="$(mktemp)"
-          if [ -f "deploy/manifest.json" ]; then
-            cp deploy/manifest.json "$MANI_TMP"
-          else
-            echo '{ "versions": {} }' > "$MANI_TMP"
+
+          MANI="deploy/manifest.json"
+          if [ ! -f "$MANI" ]; then
+            echo '{ "series": {} }' > "$MANI"
           fi
 
-          jq --arg ver "${version}" \
-             --arg url "$BASE_URL/${version}/" \
+          # Ajout/MAJ de l'entrée de sous-version dans la série
+          tmp="$(mktemp)"
+          jq --arg series "$SERIES" \
+             --arg subver "$SUBVER" \
+             --arg url "$BASE_URL/$SERIES/$SUBVER/" \
              --arg ref "${REF_DISPLAY}" \
              --arg base "${AMP_BASE_OS}" \
-             --arg rel "${AMP_RELEASE}" \
+             --arg rel  "${AMP_RELEASE}" \
              --arg arch "${AMP_ARCH}" \
              --arg typ  "${AMP_IMAGE_TYPE}" \
              --arg dib  "${PIN_WITH_DIB_REPOREF}" \
              --arg ucu  "${UPPER_CONSTRAINTS_URL:-none}" \
-             '.versions[$ver] = { "url": $url, "date": (now | todate), "octavia_ref": $ref, "base_os": $base, "release": $rel, "arch": $arch, "type": $typ, "pin_with_dib_reporef": $dib, "upper_constraints_url": $ucu }' \
-             "$MANI_TMP" > deploy/manifest.json
+             '
+             .series[$series].builds[$subver] = {
+               "url": $url,
+               "date": (now | todate),
+               "octavia_ref": $ref,
+               "base_os": $base,
+               "release": $rel,
+               "arch": $arch,
+               "type": $typ,
+               "pin_with_dib_reporef": $dib,
+               "upper_constraints_url": $ucu
+             }
+             ' "$MANI" > "$tmp" && mv "$tmp" "$MANI"
 
-          cp deploy/manifest.json deploy/${version}/
+          # Mettre "latest" de la série sur la sous-version courante
+          tmp="$(mktemp)"
+          jq --arg series "$SERIES" --arg subver "$SUBVER" \
+             '.series[$series].latest = $subver' \
+             "$MANI" > "$tmp" && mv "$tmp" "$MANI"
 
-      - name: Deploy to SFTP server
+          echo "Manifest (local) after update:"
+          cat "$MANI"
+
+      - name: Deploy to SFTP server (series + global latest by max series)
         run: |
           set -euo pipefail
+
+          : "${{ secrets.SFTP_USERNAME?Missing SFTP_USERNAME }}"
+          : "${{ secrets.SFTP_HOST?Missing SFTP_HOST }}"
+          : "${{ secrets.SFTP_PRIVATE_KEY?Missing SFTP_PRIVATE_KEY }}"
+          PORT="${{ secrets.SFTP_PORT || '22' }}"
+
+          # Re-calc série/sous-version
+          VMAJ="$(printf '%s' "$version" | awk -F. '{print $1}')"
+          VMIN="$(printf '%s' "$version" | awk -F. '{print $2}')"
+          VPATCH="$(printf '%s' "$version" | awk -F. '{print $3}')"
+          if [[ -n "${VMAJ}" && -n "${VMIN}" && -n "${VPATCH}" ]]; then
+            SERIES="${VMAJ}.${VMIN}"
+            SUBVER="${VMAJ}.${VMIN}.${VPATCH}"
+          else
+            SERIES="${version}"
+            SUBVER="${version}"
+          fi
+
           mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.SFTP_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          printf '%s\n' "${{ secrets.SFTP_PRIVATE_KEY }}" | tr -d '\r' > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
 
-          KEY_PATH="/github/home/.ssh/deploy_key"
-          SSH_OPTS="-i $KEY_PATH -p ${{ secrets.SFTP_PORT || 22 }} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
-          SSH_CMD="ssh $SSH_OPTS ${{ secrets.SFTP_USERNAME }}@${{ secrets.SFTP_HOST }}"
+          cat > ~/.ssh/config <<EOF
+          Host target
+            HostName ${{ secrets.SFTP_HOST }}
+            User ${{ secrets.SFTP_USERNAME }}
+            Port ${PORT}
+            IdentityFile ~/.ssh/deploy_key
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            LogLevel ERROR
+          EOF
+          chmod 600 ~/.ssh/config
+
+          SSH_OPTS="-F $HOME/.ssh/config"
+          SSH_CMD="ssh $SSH_OPTS target"
           REPO_NAME="${{ github.event.repository.name }}"
           REMOTE_PATH="public_html/repo.openimages.cloud/$REPO_NAME"
 
           echo "SSH connection test"
           $SSH_CMD "echo 'SSH OK'"
 
-          $SSH_CMD "mkdir -p $REMOTE_PATH/${version}"
-          rsync -avz -e "ssh $SSH_OPTS" \
-            deploy/${version}/ ${{ secrets.SFTP_USERNAME }}@${{ secrets.SFTP_HOST }}:$REMOTE_PATH/${version}/
+          # Créer arbo distante série/sous-version
+          $SSH_CMD "mkdir -p $REMOTE_PATH/${SERIES}/${SUBVER}"
 
+          # Upload sous-version
           rsync -avz -e "ssh $SSH_OPTS" \
-            deploy/manifest.json ${{ secrets.SFTP_USERNAME }}@${{ secrets.SFTP_HOST }}:$REMOTE_PATH/manifest.json
+            "deploy/${SERIES}/${SUBVER}/" "target:${REMOTE_PATH}/${SERIES}/${SUBVER}/"
 
-          $SSH_CMD "rm -f $REMOTE_PATH/latest"
-          $SSH_CMD "ln -sf ${version} $REMOTE_PATH/latest"
+          # Upload manifest racine
+          rsync -avz -e "ssh $SSH_OPTS" \
+            "deploy/manifest.json" "target:${REMOTE_PATH}/manifest.json"
+
+          # Lien 'latest' de la série courante -> sous-version courante
+          $SSH_CMD "rm -f $REMOTE_PATH/${SERIES}/latest && ln -sf ${SUBVER} $REMOTE_PATH/${SERIES}/latest"
+
+          # --- Calcul 'latest' GLOBAL par série max (major.minor) ---
+          GLOBAL_SERIES="$(jq -r '.series | keys[]?' deploy/manifest.json | awk -F. '
+            BEGIN { maxmaj=-1; maxmin=-1; best="" }
+            {
+              maj=$1+0; min=$2+0;
+              if (maj>maxmaj || (maj==maxmaj && min>maxmin)) { maxmaj=maj; maxmin=min; best=$0 }
+            }
+            END { print best }')"
+
+          if [[ -n "${GLOBAL_SERIES}" ]]; then
+            GLOBAL_SUBVER="$(jq -r --arg s "${GLOBAL_SERIES}" '.series[$s].latest' deploy/manifest.json)"
+            if [[ -n "${GLOBAL_SUBVER}" && "${GLOBAL_SUBVER}" != "null" ]]; then
+              # latest global -> <SÉRIE_MAX>/<SOUS_VERSION_LATEST_DE_CETTE_SÉRIE>
+              $SSH_CMD "rm -f $REMOTE_PATH/latest && ln -sf ${GLOBAL_SERIES}/${GLOBAL_SUBVER} $REMOTE_PATH/latest"
+              echo "Global latest = ${GLOBAL_SERIES}/${GLOBAL_SUBVER}"
+            else
+              echo "WARN: Pas de sous-version 'latest' pour la série ${GLOBAL_SERIES}"
+            fi
+          else
+            echo "WARN: Aucune série trouvée dans manifest.json"
+          fi
 
           echo "✅ Deployment completed"
           echo "🌐 URLs:"
-          echo "  - Version ${version} : https://repo.openimages.cloud/$REPO_NAME/${version}/"
-          echo "  - Latest version      : https://repo.openimages.cloud/$REPO_NAME/latest/"
-          echo "  - Manifest            : https://repo.openimages.cloud/$REPO_NAME/manifest.json"
+          echo "  - Series latest        : https://repo.openimages.cloud/$REPO_NAME/${SERIES}/latest/"
+          echo "  - This sub-version     : https://repo.openimages.cloud/$REPO_NAME/${SERIES}/${SUBVER}/"
+          echo "  - Global latest        : https://repo.openimages.cloud/$REPO_NAME/latest/"
+          echo "  - Manifest             : https://repo.openimages.cloud/$REPO_NAME/manifest.json"
 
