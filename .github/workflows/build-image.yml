@@ -200,7 +200,9 @@ jobs:
     container:
       image: ghcr.io/net-architect-cloud/docker-scp-gateway:latest
       options: --user root
-
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
