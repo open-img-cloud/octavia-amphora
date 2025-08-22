@@ -11,7 +11,7 @@ env:
   CLOUD_INIT_DATASOURCES: ConfigDrive
 
   OCTAVIA_REF: ""                 # auto-dérivé si vide: stable/MAJOR.MINOR
-  PIN_WITH_DIB_REPOREF: "false"   # "true" => DIB_REPOREF_amphora_agent
+  PIN_WITH_DIB_REPOREF: "false"   # "true" => DIB_REPOREF_amphora_agent (peut être forcé automatiquement)
   UPPER_CONSTRAINTS_URL: ""       # auto-dérivé selon la ref (branche/tag)
 
 on:
@@ -105,15 +105,11 @@ jobs:
             if [ -z "${UPPER_CONSTRAINTS_URL}" ]; then
               if echo "${REF}" | grep -Eq '^stable/[0-9]+\.[0-9]+$'; then
                 echo "UPPER_CONSTRAINTS_URL=https://opendev.org/openstack/requirements/raw/branch/${REF}/upper-constraints.txt" >> $GITHUB_ENV
-              elif echo "${REF}" | grep -Eq '.*-eol$'; then
-                echo "UPPER_CONSTRAINTS_URL=https://opendev.org/openstack/requirements/raw/tag/${REF}/upper-constraints.txt" >> $GITHUB_ENV
-              elif echo "${REF}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+              elif echo "${REF}" | grep -Eq '.*-eol$|^[0-9]+\.[0-9]+\.[0-9]+$'; then
                 echo "UPPER_CONSTRAINTS_URL=https://opendev.org/openstack/requirements/raw/tag/${REF}/upper-constraints.txt" >> $GITHUB_ENV
               elif echo "${REF}" | grep -Eq '^[0-9a-f]{7,40}$'; then
-                # SHA: on retombe sur la série du tag build
                 echo "UPPER_CONSTRAINTS_URL=https://opendev.org/openstack/requirements/raw/branch/stable/${SERIES}/upper-constraints.txt" >> $GITHUB_ENV
               else
-                # autre tag "nommé"
                 echo "UPPER_CONSTRAINTS_URL=https://opendev.org/openstack/requirements/raw/tag/${REF}/upper-constraints.txt" >> $GITHUB_ENV
               fi
             fi
@@ -156,8 +152,11 @@ jobs:
           REF="${OCTAVIA_REF}"
           USE_DIB_REPOREF="${PIN_WITH_DIB_REPOREF}"
 
-          if [ -n "$REF" ] && [ "$USE_DIB_REPOREF" = "true" ]; then
+          # --- AUTO: tag/SHA => DIB_REPOREF ; branch stable => -g ---
+          if [ -n "$REF" ] && ! echo "$REF" | grep -Eq '^stable/[0-9]+\.[0-9]+$'; then
             export DIB_REPOREF_amphora_agent="$REF"
+            USE_DIB_REPOREF="true"
+            echo "Auto: using DIB_REPOREF_amphora_agent=$REF (no -g) for tag/SHA"
           fi
 
           OUTPUT_BASENAME="amphora-${AMP_ARCH}-haproxy"
@@ -171,7 +170,8 @@ jobs:
                 -s "${AMP_SIZE_GB}"
                 -o "${OUTPUT_BASENAME}" )
 
-          if [ -n "$REF" ] && [ "$USE_DIB_REPOREF" != "true" ]; then
+          # Ajouter -g UNIQUEMENT pour les branches stable/X.Y
+          if [ -n "$REF" ] && echo "$REF" | grep -Eq '^stable/[0-9]+\.[0-9]+$'; then
             CMD+=( -g "$REF" )
           fi
 
@@ -187,7 +187,6 @@ jobs:
           else
             NAME_SUFFIX="${REF_SAFE}-${version}"
           fi
-
           FINAL="amphora-${AMP_ARCH}-haproxy-${NAME_SUFFIX}.${AMP_IMAGE_TYPE}"
           mv "${OUTFILE}" "${FINAL}"
           # --------------------------------------
