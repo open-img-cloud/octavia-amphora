@@ -12,7 +12,7 @@ env:
 
   OCTAVIA_REF: ""                 # auto-dérivé si vide: stable/MAJOR.MINOR
   PIN_WITH_DIB_REPOREF: "false"   # "true" => DIB_REPOREF_amphora_agent
-  UPPER_CONSTRAINTS_URL: ""       # auto-dérivé si vide
+  UPPER_CONSTRAINTS_URL: ""       # auto-dérivé selon la ref (branche/tag)
 
 on:
   push:
@@ -20,7 +20,7 @@ on:
   workflow_dispatch:
     inputs:
       octavia_ref:
-        description: "Branche/tag/SHA Octavia (ex: stable/2024.1)"
+        description: "Branche/tag/SHA Octavia (ex: stable/2024.1, victoria-eol, 17.0.0)"
         required: false
         default: ""
       pin_with_dib_reporef:
@@ -80,21 +80,43 @@ jobs:
             echo "UPPER_CONSTRAINTS_URL=${{ env.UPPER_CONSTRAINTS_URL }}" >> $GITHUB_ENV
           fi
 
-      - name: Derive SERIES, OCTAVIA_REF & upper-constraints if empty (from tag)
+      - name: Derive SERIES, OCTAVIA_REF & upper-constraints (branch/tag/SHA aware)
         shell: bash
         run: |
+          set -euo pipefail
           VMAJ="$(echo "${version}" | cut -d. -f1)"
           VMIN="$(echo "${version}" | cut -d. -f2)"
           SERIES="${VMAJ}.${VMIN}"
           echo "SERIES=${SERIES}" >> $GITHUB_ENV
 
-          if [ -z "${OCTAVIA_REF}" ]; then
-            echo "OCTAVIA_REF=stable/${SERIES}" >> $GITHUB_ENV
-            echo "Derived OCTAVIA_REF=stable/${SERIES}"
-          fi
-          if [ -z "${UPPER_CONSTRAINTS_URL}" ]; then
-            echo "UPPER_CONSTRAINTS_URL=https://opendev.org/openstack/requirements/raw/branch/stable/${SERIES}/upper-constraints.txt" >> $GITHUB_ENV
-            echo "Derived UPPER_CONSTRAINTS_URL for series ${SERIES}"
+          REF="${OCTAVIA_REF}"
+
+          if [ -z "${REF}" ]; then
+            REF="stable/${SERIES}"
+            echo "OCTAVIA_REF=${REF}" >> $GITHUB_ENV
+            echo "Derived OCTAVIA_REF=${REF} from version tag ${version}"
+            if [ -z "${UPPER_CONSTRAINTS_URL}" ]; then
+              echo "UPPER_CONSTRAINTS_URL=https://opendev.org/openstack/requirements/raw/branch/${REF}/upper-constraints.txt" >> $GITHUB_ENV
+              echo "Derived UPPER_CONSTRAINTS_URL for ${REF}"
+            fi
+          else
+            echo "OCTAVIA_REF=${REF}" >> $GITHUB_ENV
+            echo "Using user-provided OCTAVIA_REF=${REF}"
+            if [ -z "${UPPER_CONSTRAINTS_URL}" ]; then
+              if echo "${REF}" | grep -Eq '^stable/[0-9]+\.[0-9]+$'; then
+                echo "UPPER_CONSTRAINTS_URL=https://opendev.org/openstack/requirements/raw/branch/${REF}/upper-constraints.txt" >> $GITHUB_ENV
+              elif echo "${REF}" | grep -Eq '.*-eol$'; then
+                echo "UPPER_CONSTRAINTS_URL=https://opendev.org/openstack/requirements/raw/tag/${REF}/upper-constraints.txt" >> $GITHUB_ENV
+              elif echo "${REF}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+                echo "UPPER_CONSTRAINTS_URL=https://opendev.org/openstack/requirements/raw/tag/${REF}/upper-constraints.txt" >> $GITHUB_ENV
+              elif echo "${REF}" | grep -Eq '^[0-9a-f]{7,40}$'; then
+                # SHA: on retombe sur la série du tag build
+                echo "UPPER_CONSTRAINTS_URL=https://opendev.org/openstack/requirements/raw/branch/stable/${SERIES}/upper-constraints.txt" >> $GITHUB_ENV
+              else
+                # autre tag "nommé"
+                echo "UPPER_CONSTRAINTS_URL=https://opendev.org/openstack/requirements/raw/tag/${REF}/upper-constraints.txt" >> $GITHUB_ENV
+              fi
+            fi
           fi
 
       - name: Install build prerequisites
@@ -156,14 +178,23 @@ jobs:
           echo ">>> ${CMD[*]}"
           "${CMD[@]}"
 
-          REF_SAFE="${REF:-default}"
-          REF_SAFE="${REF_SAFE//\//_}"
-          FINAL="amphora-${AMP_ARCH}-haproxy-${REF_SAFE}-${version}.${AMP_IMAGE_TYPE}"
+          # ---------- Règles de nommage ----------
+          REF_SAFE="${REF//\//_}"
+          if [ -z "${REF}" ] || echo "${REF}" | grep -Eq '^stable/[0-9]+\.[0-9]+$'; then
+            NAME_SUFFIX="stable_${version}"
+          elif echo "${REF}" | grep -Eq '.*-eol$|^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            NAME_SUFFIX="${REF_SAFE}"
+          else
+            NAME_SUFFIX="${REF_SAFE}-${version}"
+          fi
+
+          FINAL="amphora-${AMP_ARCH}-haproxy-${NAME_SUFFIX}.${AMP_IMAGE_TYPE}"
           mv "${OUTFILE}" "${FINAL}"
+          # --------------------------------------
 
           {
             echo "# Octavia Amphora ${version} checksums"
-            echo "# Ref=${REF_SAFE} BaseOS=${AMP_BASE_OS} Release=${AMP_RELEASE} Arch=${AMP_ARCH}"
+            echo "# Ref=${REF:-derived} BaseOS=${AMP_BASE_OS} Release=${AMP_RELEASE} Arch=${AMP_ARCH}"
             echo "# Constraints=${UPPER_CONSTRAINTS_URL:-none}"
             echo "# Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
             echo ""
@@ -172,10 +203,14 @@ jobs:
             echo "";           echo "## SHA256"; sha256sum "${FINAL}"
           } > checksums.txt
 
+          # Arbo locale par série/sous-version pour l'upload
+          VMAJ="$(echo "${version}" | cut -d. -f1)"
+          VMIN="$(echo "${version}" | cut -d. -f2)"
+          SERIES="${VMAJ}.${VMIN}"
           mkdir -p /shared/${SERIES}/${version}
           cp "${FINAL}" checksums.txt /shared/${SERIES}/${version}/
 
-      - name: Upload artifacts
+      - name: Upload artifacts (series/subversion)
         uses: actions/upload-artifact@v4
         with:
           name: octavia-amphora-image
@@ -197,18 +232,18 @@ jobs:
         with:
           path: artifacts
 
-      - name: Flatten artifacts into deploy dir
+      - name: Flatten artifacts into deploy dir + build manifest.json
+        shell: bash
         run: |
           set -euo pipefail
           SERIES="$(echo "${version}" | cut -d. -f1,2)"
           mkdir -p deploy/${SERIES}/${version}
+          shopt -s nullglob
           for d in artifacts/*; do
             [ -d "$d" ] && cp -r "$d"/* "deploy/${SERIES}/${version}/"
           done
           echo "SERIES=$SERIES" >> $GITHUB_ENV
-          ls -la deploy/${SERIES}/${version}
 
-          # Génère manifest.json (merge si déjà présent)
           REPO_NAME="${{ github.event.repository.name }}"
           BASE_URL="https://repo.openimages.cloud/$REPO_NAME"
           MANI="deploy/manifest.json"
@@ -227,7 +262,7 @@ jobs:
              '.versions[$ver] = { "series": $ser, "url": $url, "date": (now | todate), "octavia_ref": $ref, "base_os": $base, "release": $rel, "arch": $arch, "type": $typ, "pin_with_dib_reporef": $dib, "upper_constraints_url": $ucu }' \
              "$MANI" > "$MANI.tmp" && mv "$MANI.tmp" "$MANI"
 
-      - name: Deploy to SFTP server
+      - name: Deploy to SFTP server (keep your SSH conf)
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh
@@ -249,14 +284,19 @@ jobs:
           echo "SSH connection test"
           $SSH_CMD "echo 'SSH OK'"
 
+          # Upload sous-version (dans le dossier de la série)
           $SSH_CMD "mkdir -p $REMOTE_PATH/${SERIES}/${SUBVER}"
           rsync -avz -e "ssh $SSH_OPTS" \
             deploy/${SERIES}/${SUBVER}/ ${{ secrets.SFTP_USERNAME }}@${{ secrets.SFTP_HOST }}:$REMOTE_PATH/${SERIES}/${SUBVER}/
 
+          # Upload/merge manifest.json à la racine
           rsync -avz -e "ssh $SSH_OPTS" \
             deploy/manifest.json ${{ secrets.SFTP_USERNAME }}@${{ secrets.SFTP_HOST }}:$REMOTE_PATH/manifest.json
 
+          # latest de la série -> sous-version courante (dossier)
           $SSH_CMD "ln -sfn ${SUBVER} $REMOTE_PATH/${SERIES}/latest"
+
+          # latest global -> série/sous-version courante (dossier)
           $SSH_CMD "ln -sfn ${SERIES}/${SUBVER} $REMOTE_PATH/latest"
 
           echo "✅ Deployment completed"
@@ -265,3 +305,4 @@ jobs:
           echo "  - Series latest        : https://repo.openimages.cloud/$REPO_NAME/${SERIES}/latest/"
           echo "  - Global latest        : https://repo.openimages.cloud/$REPO_NAME/latest/"
           echo "  - Manifest             : https://repo.openimages.cloud/$REPO_NAME/manifest.json"
+
