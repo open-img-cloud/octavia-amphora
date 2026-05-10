@@ -96,6 +96,19 @@ chmod +x ./diskimage-create.sh
 export CLOUD_INIT_DATASOURCES
 export DIB_REPOLOCATION_upper_constraints="$UPPER_CONSTRAINTS_URL"
 
+# debootstrap's `--variant=minbase` (DIB default for ubuntu-minimal)
+# excludes gpgv, but the dpkg element's post-install hook then runs
+# `apt-get update` inside the chroot which fails with "gpgv required
+# for verification, but neither seems installed". Force-include gpgv
+# (and gnupg2 / ca-certificates while we're at it — they're tiny and
+# regularly tripped over by other elements that fetch over HTTPS).
+export DIB_DEBOOTSTRAP_EXTRA_ARGS='--include=gpgv,gnupg2,ca-certificates'
+
+# Clear any stale debootstrap cache from a previous run that may have
+# been built without gpgv (DIB caches the bootstrapped rootfs as
+# ~/.cache/image-create/debootstrap-<distro>-<release>-<arch>.tar.gz).
+rm -rf "$HOME/.cache/image-create" || true
+
 CMD=( ./diskimage-create.sh
       -i "$AMP_BASE_OS"
       -d "$AMP_RELEASE"
