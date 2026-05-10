@@ -70,9 +70,17 @@ jobs:
       version: ${{ needs.resolve-version.outputs.version }}
       output_filename: 'amphora-{version}-amd64-haproxy.qcow2'
       build_script: build/dib-build.sh
-      # Override the default stackopshq builder: DIB needs apt + debootstrap
-      # for ubuntu-minimal as the amphora base, so we use plain ubuntu:24.04.
-      # That's NOT cosign-signed by us, so disable verify_builder.
+      # GH-hosted runner instead of our self-hosted Rocky+Podman ones:
+      # DIB needs full CAP_SYS_ADMIN/CAP_MKNOD inside the build container
+      # (mount, mknod /dev/null, fchmod /dev/*). Our self-hosted runners
+      # use rootless Podman where --privileged maps caps through a uid
+      # namespace and silently strips many of them, breaking debootstrap
+      # and apt-key. GH-hosted ubuntu-latest runs Docker on a real
+      # Ubuntu VM with root and full caps, where --privileged works.
+      runner_labels: '["ubuntu-latest"]'
+      # ubuntu:24.04 base for the build container (debootstrap + apt deps
+      # for the ubuntu-minimal element). NOT cosign-signed by us, so
+      # disable verify_builder.
       build_container: 'ubuntu:24.04'
       verify_builder: false
       publish: ${{ inputs.publish == true || github.event_name == 'push' }}
