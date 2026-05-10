@@ -1,0 +1,80 @@
+name: Build & publish image
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'OpenStack series, e.g. 2025.2 (Flamingo). Maps to stable/X.Y on opendev/openstack/octavia.'
+        required: false
+      octavia_ref:
+        description: 'Override Octavia ref (branch/tag/SHA). Empty = auto-derive stable/<MAJOR>.<MINOR> from version.'
+        required: false
+        default: ''
+      base_os:
+        description: 'DIB base OS element (ubuntu-minimal, debian-minimal, rocky, ...).'
+        required: false
+        default: 'ubuntu-minimal'
+      release_id:
+        description: 'Codename for the base OS (noble, bookworm, 9-stream, ...).'
+        required: false
+        default: 'noble'
+      publish:
+        description: 'If false, skip upload + CF purge (PR / dry-run validation)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write   # cosign keyless via GitHub OIDC
+
+jobs:
+  resolve-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+      - id: v
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${{ inputs.version }}" ]]; then
+            v="${{ inputs.version }}"
+          elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            v="${GITHUB_REF#refs/tags/v}"
+          elif [[ -f VERSION ]]; then
+            v=$(tr -d '[:space:]' < VERSION)
+          else
+            echo "::error::no version provided and no VERSION file found"
+            exit 1
+          fi
+          # Sanity-check: version is OpenStack-style YYYY.N (no SHAs, no
+          # tag suffix). The dib-build script then maps it to
+          # stable/<v> on opendev/openstack/octavia.
+          if [[ ! "$v" =~ ^[0-9]{4}\.[0-9]+$ ]]; then
+            echo "::error::version '$v' is not OpenStack-series form (expected YYYY.N, e.g. 2025.2)"
+            exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Resolved: version=$v"
+
+  build:
+    needs: resolve-version
+    name: Build
+    uses: open-img-cloud/.github/.github/workflows/build-dib-image.yml@main
+    with:
+      os_name: octavia-amphora
+      version: ${{ needs.resolve-version.outputs.version }}
+      output_filename: 'amphora-{version}-amd64-haproxy.qcow2'
+      build_script: build/dib-build.sh
+      # Override the default stackopshq builder: DIB needs apt + debootstrap
+      # for ubuntu-minimal as the amphora base, so we use plain ubuntu:24.04.
+      # That's NOT cosign-signed by us, so disable verify_builder.
+      build_container: 'ubuntu:24.04'
+      verify_builder: false
+      publish: ${{ inputs.publish == true || github.event_name == 'push' }}
+      sync_latest: true
+    secrets: inherit
