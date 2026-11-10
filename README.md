@@ -26,7 +26,7 @@
 
 ## About
 
-This repo builds **Octavia amphora** images — the qcow2 images deployed
+This repo builds **Octavia amphora** images: the qcow2 images deployed
 by OpenStack [Octavia LBaaS][octavia] as load-balancer instances. Unlike
 the other openimages.cloud repos (alpaquita, alpine, AL2023, …) which
 republish OS images for end-users, amphora is an **OpenStack control
@@ -93,7 +93,7 @@ cosign verify-blob \
 ```
 
 The certificate identity points at the **reusable** DIB build workflow
-in `open-img-cloud/.github` — that's where GitHub's OIDC binds the SAN
+in `open-img-cloud/.github`: that's where GitHub's OIDC binds the SAN
 for keyless signing. To tie the artifact back to *this* repo's commit,
 also check `MANIFEST.json` (commit, build_url, builder digest).
 
@@ -120,7 +120,7 @@ openstack image create \
 ## Release flow
 
 1. Maintainer bumps `VERSION` to the target OpenStack series (no
-   `watch.yml` here — OpenStack ships every 6 months on a known
+   `watch.yml` here: OpenStack ships every 6 months on a known
    schedule, manual bump is fine).
 2. Tag `v<version>` triggers `release.yml`, which calls the shared
    `build-dib-image.yml@main` reusable workflow.
@@ -149,8 +149,8 @@ LICENSE                          GPL-2.0
 
 ## Notes vs the OS-image repos
 
-- **No cloud-init policy drop-in.** Amphora isn't bootable by end-users
-  — its userdata is consumed by the `amphora-agent` running inside the
+- **No cloud-init policy drop-in.** Amphora isn't bootable by end-users:
+  its userdata is consumed by the `amphora-agent` running inside the
   image, not generic cloud-init. The `99_oic-policy.cfg` injection that
   the libguestfs reusable does for OS images is irrelevant here.
 - **No smoke test.** Amphora boots into a constrained network namespace
@@ -159,7 +159,7 @@ LICENSE                          GPL-2.0
   post-deploy via Octavia's own health checks.
 - **Build container is `ubuntu:24.04`**, not the stackopshq libguestfs
   image, because the ubuntu-minimal DIB element needs `debootstrap` +
-  apt deps. As a consequence `verify_builder: false` — we trust
+  apt deps. As a consequence `verify_builder: false`: we trust
   Docker Hub's `ubuntu:24.04` here. This may tighten later if we ship
   our own dib-builder image.
 
@@ -175,7 +175,7 @@ Distributed under the GPL-2.0 License. See `LICENSE`.
 
 ## Contact
 
-Kevin Allioli — kevin@stackops.ch · [@stackopshq](https://twitter.com/stackopshq)
+Kevin Allioli · kevin@stackops.ch · [@stackopshq](https://twitter.com/stackopshq)
 
 Project: [open-img-cloud/octavia-amphora](https://github.com/open-img-cloud/octavia-amphora)
 
