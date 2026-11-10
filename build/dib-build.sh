@@ -47,15 +47,24 @@ SERIES="${VMAJ}.${VMIN}"
 REF="$OCTAVIA_REF"
 USE_DASH_G="0"
 if [[ -z "$REF" ]]; then
+  # Once a series leaves maintenance, OpenStack deletes stable/X.Y and keeps
+  # it as unmaintained/X.Y (e.g. 2025.1 since 2026-11). Fall back to it so
+  # older series stay rebuildable.
   REF="stable/${SERIES}"
+  if ! git ls-remote --exit-code --heads https://opendev.org/openstack/octavia.git "$REF" >/dev/null 2>&1; then
+    if git ls-remote --exit-code --heads https://opendev.org/openstack/octavia.git "unmaintained/${SERIES}" >/dev/null 2>&1; then
+      echo "[dib-build] $REF is gone upstream, using unmaintained/${SERIES}"
+      REF="unmaintained/${SERIES}"
+    fi
+  fi
   USE_DASH_G="1"
-elif [[ "$REF" =~ ^stable/[0-9]+\.[0-9]+$ ]]; then
+elif [[ "$REF" =~ ^(stable|unmaintained)/[0-9]+\.[0-9]+$ ]]; then
   USE_DASH_G="1"
 fi
 
 UPPER_CONSTRAINTS_URL="${UPPER_CONSTRAINTS_URL:-}"
 if [[ -z "$UPPER_CONSTRAINTS_URL" ]]; then
-  if [[ "$REF" =~ ^stable/[0-9]+\.[0-9]+$ ]]; then
+  if [[ "$REF" =~ ^(stable|unmaintained)/[0-9]+\.[0-9]+$ ]]; then
     UPPER_CONSTRAINTS_URL="https://opendev.org/openstack/requirements/raw/branch/${REF}/upper-constraints.txt"
   elif [[ "$REF" =~ ^[0-9a-f]{7,40}$ ]]; then
     UPPER_CONSTRAINTS_URL="https://opendev.org/openstack/requirements/raw/branch/stable/${SERIES}/upper-constraints.txt"
