@@ -73,6 +73,14 @@ if [[ -z "$UPPER_CONSTRAINTS_URL" ]]; then
   fi
 fi
 
+# Octavia's own DIB elements pin octavia-lib to stable/X.Y. For an
+# unmaintained series that branch is gone too: point octavia-lib at the
+# matching unmaintained/X.Y (amphora-agent is already covered by -g).
+if [[ "$REF" =~ ^unmaintained/[0-9]+\.[0-9]+$ && -z "${DIB_REPOREF_octavia_lib:-}" ]]; then
+  export DIB_REPOREF_octavia_lib="$REF"
+  echo "[dib-build] DIB_REPOREF_octavia_lib=$DIB_REPOREF_octavia_lib"
+fi
+
 echo "[dib-build] ref=$REF use_dash_g=$USE_DASH_G upper_constraints=$UPPER_CONSTRAINTS_URL"
 
 # --- Install build prerequisites (Ubuntu container) -----------------
