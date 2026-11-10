@@ -43,11 +43,19 @@ jobs:
           aws s3 ls --endpoint-url "$S3_ENDPOINT" "s3://$BUCKET/$VERSION/MANIFEST.json" \
             || { echo "::error::$VERSION is not published in $BUCKET"; exit 1; }
 
-      - name: Sync version to latest/
+      - name: Copy version to latest/
         run: |
           set -euo pipefail
-          aws s3 sync --delete --no-progress \
+          # `aws s3 sync` alone is not enough here: it skips files of the
+          # same size whose destination copy is newer, which is exactly the
+          # case when rolling latest/ to an older build (MANIFEST.json,
+          # SHA256SUMS, index.html keep their size across versions).
+          # Copy everything unconditionally, then only delete leftovers.
+          aws s3 cp --recursive --no-progress \
             --cache-control "public, max-age=300" --metadata-directive REPLACE \
+            --endpoint-url "$S3_ENDPOINT" \
+            "s3://$BUCKET/$VERSION/" "s3://$BUCKET/latest/"
+          aws s3 sync --delete --no-progress --size-only \
             --endpoint-url "$S3_ENDPOINT" \
             "s3://$BUCKET/$VERSION/" "s3://$BUCKET/latest/"
 
