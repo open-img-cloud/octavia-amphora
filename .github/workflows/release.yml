@@ -35,6 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
+      is_latest: ${{ steps.v.outputs.is_latest }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
       - id: v
@@ -60,6 +61,13 @@ jobs:
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "Resolved: version=$v"
+          # latest/ must only follow the newest series. Republishing an
+          # older one (e.g. 2025.1 after 2026.1) must not move the alias.
+          current=$(tr -d '[:space:]' < VERSION)
+          newest=$(printf '%s\n%s\n' "$v" "$current" | sort -V | tail -n1)
+          if [[ "$newest" == "$v" ]]; then is_latest=true; else is_latest=false; fi
+          echo "is_latest=$is_latest" >> "$GITHUB_OUTPUT"
+          echo "latest/ alias update: $is_latest (VERSION=$current)"
 
   build:
     needs: resolve-version
@@ -84,5 +92,5 @@ jobs:
       build_container: 'ubuntu:24.04'
       verify_builder: false
       publish: ${{ inputs.publish == true || github.event_name == 'push' }}
-      sync_latest: true
+      sync_latest: ${{ needs.resolve-version.outputs.is_latest == 'true' }}
     secrets: inherit
