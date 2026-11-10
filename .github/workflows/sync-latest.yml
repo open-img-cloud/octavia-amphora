@@ -66,7 +66,13 @@ jobs:
         run: |
           set -euo pipefail
           files=$(aws s3 ls --endpoint-url "$S3_ENDPOINT" "s3://$BUCKET/latest/" | awk '{print $4}')
-          urls=$(for f in $files ""; do printf '"https://images.openimages.cloud/%s/latest/%s",' "$BUCKET" "$f"; done)
+          # Purge both the public URL and the origin URL the images-router
+          # Worker actually caches (its subrequest to Infomaniak).
+          origin="https://s3.gva2.infomaniak.cloud/c0862b7f7b6849508bbcd74fb00e7fe2:$BUCKET/latest"
+          urls=$(for f in $files ""; do
+            printf '"https://images.openimages.cloud/%s/latest/%s",' "$BUCKET" "$f"
+            printf '"%s/%s",' "$origin" "${f:-index.html}"
+          done)
           curl -fsS -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/purge_cache" \
             -H "Authorization: Bearer $CF_API_TOKEN" -H "Content-Type: application/json" \
             --data "{\"files\":[${urls%,}]}" | grep -q '"success":true'
