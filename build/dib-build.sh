@@ -13,7 +13,7 @@
 #     be re-implemented if we bypassed it
 #
 # Container expected: ubuntu:24.04 (the build_container input on
-# release.yml is set to that — debootstrap + apt deps are needed for
+# release.yml is set to that: debootstrap + apt deps are needed for
 # the ubuntu-minimal base OS variant). The reusable workflow's default
 # stackopshq libguestfs-tools image won't work because it's Rocky-based
 # and lacks debootstrap.
@@ -117,7 +117,7 @@ export DIB_REPOLOCATION_upper_constraints="$UPPER_CONSTRAINTS_URL"
 # excludes gpgv, but the dpkg element's post-install hook then runs
 # `apt-get update` inside the chroot which fails with "gpgv required
 # for verification, but neither seems installed". Force-include gpgv
-# (and gnupg2 / ca-certificates while we're at it — they're tiny and
+# (and gnupg2 / ca-certificates while we're at it: they're tiny and
 # regularly tripped over by other elements that fetch over HTTPS).
 export DIB_DEBOOTSTRAP_EXTRA_ARGS='--include=gpgv,gnupg2,ca-certificates'
 
