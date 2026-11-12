@@ -46,27 +46,29 @@ in [`open-img-cloud/.github`][shared] (`@main`).
 
 ## Versioning
 
-`<version>` is the **OpenStack series** (e.g. `2025.2` for "Flamingo"),
+`<version>` is the **OpenStack series** (e.g. `2026.1` for "Gazpacho"),
 which maps to the matching `stable/X.Y` branch of
-`opendev.org/openstack/octavia`. The build pulls Octavia at that branch,
+`opendev.org/openstack/octavia` (or `unmaintained/X.Y` once OpenStack has
+retired the stable branch). The build pulls Octavia at that branch,
 installs its `diskimage-create` requirements via a Python venv, and
 runs the script with the corresponding upper-constraints URL from
 `opendev.org/openstack/requirements`.
 
-Tag your release as `v<version>` (e.g. `v2025.2`) to publish.
+Tag your release as `v<version>` (e.g. `v2026.1`) to publish.
 
-| OpenStack series | Codename  | Octavia branch       |
-|------------------|-----------|----------------------|
-| 2024.1           | Caracal   | stable/2024.1        |
-| 2024.2           | Dalmatian | stable/2024.2        |
-| 2025.1           | Epoxy     | stable/2025.1        |
-| 2025.2           | Flamingo  | stable/2025.2 ← default |
-| 2026.1           | _TBD_     | stable/2026.1        |
+| OpenStack series | Codename  | Octavia branch              | Published |
+|------------------|-----------|-----------------------------|-----------|
+| 2025.1           | Epoxy     | unmaintained/2025.1         | yes       |
+| 2025.2           | Flamingo  | stable/2025.2               | yes       |
+| 2026.1           | Gazpacho  | stable/2026.1               | yes, default (`latest/`) |
+
+The [catalog page](https://openimages.cloud/images/octavia-amphora/) lists
+the published series and their files.
 
 ## Where to download
 
-Public CDN, served via Cloudflare in front of an R2 bucket (mirror of
-the source-of-truth Garage):
+Files are stored in Infomaniak Object Storage (Switzerland) and served
+worldwide by Cloudflare through the `images-router` Worker:
 
 | URL pattern                                                                          | Cache policy                  |
 |--------------------------------------------------------------------------------------|-------------------------------|
@@ -76,7 +78,7 @@ the source-of-truth Garage):
 Browse: [images.openimages.cloud/octavia-amphora/latest/][latest]
 
 Filename: `amphora-<version>-amd64-haproxy.qcow2` (e.g.
-`amphora-2025.2-amd64-haproxy.qcow2`).
+`amphora-2026.1-amd64-haproxy.qcow2`).
 
 ## Verify before deploy
 
@@ -102,7 +104,7 @@ also check `MANIFEST.json` (commit, build_url, builder digest).
 Once published, point your Octavia controller at the qcow2 in Glance:
 
 ```sh
-# Pull the qcow2 (replace <V> with the OpenStack series, e.g. 2025.2)
+# Pull the qcow2 (replace <V> with the OpenStack series, e.g. 2026.1)
 curl -fLO https://images.openimages.cloud/octavia-amphora/<V>/amphora-<V>-amd64-haproxy.qcow2
 
 # Upload to Glance with the amphora tag Octavia looks up
@@ -128,21 +130,22 @@ openstack image create \
    `ubuntu:24.04` container with `--privileged` (DIB needs loopback
    mounts for debootstrap).
 4. The script clones `opendev.org/openstack/octavia` at
-   `stable/<version>`, installs its `diskimage-create/requirements.txt`
+   `stable/<version>` (falling back to `unmaintained/<version>`), installs its `diskimage-create/requirements.txt`
    in a venv, then runs `diskimage-create.sh` with the matching
    upper-constraints URL.
 5. Output qcow2 is signed (cosign keyless), bundled with MANIFEST,
-   uploaded to Garage + R2, and Cloudflare cache for `latest/` is
-   purged.
+   uploaded to Infomaniak Object Storage, the Cloudflare cache for
+   `latest/` is purged and the catalog (`index.json`) is rebuilt.
 
 ## Repository layout
 
 ```
-VERSION                          single line, e.g. "2025.2"
+VERSION                          single line, e.g. "2026.1"
 build/
   dib-build.sh                   DIB build hook (out_dir as $1, version as $2)
 .github/workflows/
   release.yml                    calls build-dib-image.yml on tag push
+  sync-latest.yml                points latest/ to an already published series
 .gitignore                       repo-local override for global build/ exclusion
 LICENSE                          GPL-2.0
 ```
