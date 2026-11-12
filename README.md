@@ -34,13 +34,14 @@ It is an **OpenStack control plane component**: Octavia boots it, tenants never 
 | **Base** | Ubuntu minimal 24.04 (noble), built with [diskimage-builder](https://docs.openstack.org/diskimage-builder/) |
 | **Consumer** | The Octavia service, through a Glance image tag (`amphora`) |
 | **Format** | qcow2, x86_64, `amphora-<series>-amd64-haproxy.qcow2` |
-| **Version** | OpenStack series, e.g. `2026.1`; one image per series, older series stay published |
+| **Version** | OpenStack series, e.g. `2026.2`; one image per series, older series stay published |
 
 | OpenStack series | Codename | Octavia branch | Published |
 |---|---|---|---|
 | 2025.1 | Epoxy | unmaintained/2025.1 | yes |
 | 2025.2 | Flamingo | stable/2025.2 | yes |
-| 2026.1 | Gazpacho | stable/2026.1 | yes, `latest/` |
+| 2026.1 | Gazpacho | stable/2026.1 | yes |
+| 2026.2 | Hibiscus | stable/2026.2 | yes, `latest/` |
 
 ## Quick start
 
