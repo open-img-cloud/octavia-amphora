@@ -1,202 +1,144 @@
-<div id="top"></div>
+<p align="center">
+  <a href="https://openimages.cloud/images/octavia-amphora/">
+    <img src="https://openimages.cloud/img/og/octavia-amphora.png" alt="Octavia amphora image for OpenStack" width="720">
+  </a>
+</p>
 
-<!-- PROJECT SHIELDS -->
-[![Contributors][contributors-shield]][contributors-url]
-[![Forks][forks-shield]][forks-url]
-[![Stargazers][stars-shield]][stars-url]
-[![Issues][issues-shield]][issues-url]
-[![GPL-2.0 License][license-shield]][license-url]
+<p align="center">
+  <a href="https://openimages.cloud/images/octavia-amphora/"><img alt="Latest version" src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fimages.openimages.cloud%2Foctavia-amphora%2Flatest%2FMANIFEST.json&query=%24.version&label=latest&color=2459c4&cacheSeconds=3600"></a>
+  <a href="https://github.com/open-img-cloud/octavia-amphora/actions/workflows/release.yml"><img alt="Release" src="https://github.com/open-img-cloud/octavia-amphora/actions/workflows/release.yml/badge.svg"></a>
+  <a href="https://openimages.cloud/verify/"><img alt="Signed with Sigstore cosign" src="https://img.shields.io/badge/signed-Sigstore%20cosign-2459c4"></a>
+  <a href="LICENSE"><img alt="License GPL-2.0" src="https://img.shields.io/badge/license-GPL--2.0-555"></a>
+</p>
 
-<!-- PROJECT LOGO -->
-<br />
-<div align="center">
+<p align="center">
+  <a href="https://openimages.cloud/images/octavia-amphora/"><b>Catalog page</b></a> ·
+  <a href="https://images.openimages.cloud/octavia-amphora/latest/">Download</a> ·
+  <a href="https://openimages.cloud/verify/">Verify</a> ·
+  <a href="https://github.com/open-img-cloud/docs">Documentation</a> ·
+  <a href="https://github.com/open-img-cloud/octavia-amphora/issues">Report an issue</a>
+</p>
 
-<h3 align="center">Octavia Amphora Cloud Images</h3>
+Octavia amphora image (qcow2) for **OpenStack**: the `amphora-haproxy` image that
+[Octavia](https://docs.openstack.org/octavia/latest/) boots for each load balancer, built per
+OpenStack series with Octavia's own
+[`diskimage-create`](https://opendev.org/openstack/octavia/src/branch/master/diskimage-create)
+and signed with Sigstore cosign, like every [openimages.cloud](https://openimages.cloud) image.
+It is an **OpenStack control plane component**: Octavia boots it, tenants never do.
 
-  <p align="center">
-    Signed Octavia amphora-haproxy images for OpenStack LBaaS, built per
-    OpenStack stable release
-    <br />
-    <br />
-    <a href="https://github.com/open-img-cloud/octavia-amphora/issues">Report a bug</a>
-    ·
-    <a href="https://github.com/open-img-cloud/octavia-amphora/issues">Request a feature</a>
-  </p>
-</div>
+## At a glance
 
-## About
+| | |
+|---|---|
+| **Upstream** | [`openstack/octavia`](https://opendev.org/openstack/octavia) `diskimage-create.sh` at `stable/<series>` (or `unmaintained/<series>` once OpenStack retired the branch), with the matching `openstack/requirements` upper-constraints |
+| **Base** | Ubuntu minimal 24.04 (noble), built with [diskimage-builder](https://docs.openstack.org/diskimage-builder/) |
+| **Consumer** | The Octavia service, through a Glance image tag (`amphora`) |
+| **Format** | qcow2, x86_64, `amphora-<series>-amd64-haproxy.qcow2` |
+| **Version** | OpenStack series, e.g. `2026.1`; one image per series, older series stay published |
 
-This repo builds **Octavia amphora** images: the qcow2 images deployed
-by OpenStack [Octavia LBaaS][octavia] as load-balancer instances. Unlike
-the other openimages.cloud repos (alpaquita, alpine, AL2023, …) which
-republish OS images for end-users, amphora is an **OpenStack control
-plane component**: it's consumed by the Octavia service in your cluster,
-not by tenants directly.
+| OpenStack series | Codename | Octavia branch | Published |
+|---|---|---|---|
+| 2025.1 | Epoxy | unmaintained/2025.1 | yes |
+| 2025.2 | Flamingo | stable/2025.2 | yes |
+| 2026.1 | Gazpacho | stable/2026.1 | yes, `latest/` |
 
-The build follows Octavia's own [`diskimage-create`][octavia-dic]
-workflow, which wraps [diskimage-builder][dib] with the Octavia-specific
-`amphora-agent` element + a curated set of dependencies. We let it
-drive the build and republish through the openimages.cloud
-signed-release pipeline.
-
-The build pipeline is shared with the rest of [`open-img-cloud`][org]:
-this repo only ships the `VERSION`, `build/dib-build.sh`, and a thin
-caller workflow that delegates to the reusable `build-dib-image.yml`
-in [`open-img-cloud/.github`][shared] (`@main`).
-
-## Versioning
-
-`<version>` is the **OpenStack series** (e.g. `2026.1` for "Gazpacho"),
-which maps to the matching `stable/X.Y` branch of
-`opendev.org/openstack/octavia` (or `unmaintained/X.Y` once OpenStack has
-retired the stable branch). The build pulls Octavia at that branch,
-installs its `diskimage-create` requirements via a Python venv, and
-runs the script with the corresponding upper-constraints URL from
-`opendev.org/openstack/requirements`.
-
-Tag your release as `v<version>` (e.g. `v2026.1`) to publish.
-
-| OpenStack series | Codename  | Octavia branch              | Published |
-|------------------|-----------|-----------------------------|-----------|
-| 2025.1           | Epoxy     | unmaintained/2025.1         | yes       |
-| 2025.2           | Flamingo  | stable/2025.2               | yes       |
-| 2026.1           | Gazpacho  | stable/2026.1               | yes, default (`latest/`) |
-
-The [catalog page](https://openimages.cloud/images/octavia-amphora/) lists
-the published series and their files.
-
-## Where to download
-
-Files are stored in Infomaniak Object Storage (Switzerland) and served
-worldwide by Cloudflare through the `images-router` Worker:
-
-| URL pattern                                                                          | Cache policy                  |
-|--------------------------------------------------------------------------------------|-------------------------------|
-| `https://images.openimages.cloud/octavia-amphora/<version>/<filename>`               | `max-age=31536000, immutable` |
-| `https://images.openimages.cloud/octavia-amphora/latest/<filename>`                  | `max-age=300`                 |
-
-Browse: [images.openimages.cloud/octavia-amphora/latest/][latest]
-
-Filename: `amphora-<version>-amd64-haproxy.qcow2` (e.g.
-`amphora-2026.1-amd64-haproxy.qcow2`).
-
-## Verify before deploy
-
-cosign 3.x:
+## Quick start
 
 ```sh
-sha256sum -c <filename>.sha256                    # integrity
-cosign verify-blob \
-    --bundle <filename>.bundle \
-    --new-bundle-format \
-    --certificate-identity-regexp '^https://github.com/open-img-cloud/\.github/\.github/workflows/build-dib-image\.yml@' \
-    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-    <filename>                                     # provenance
+# Latest series and its file name, from the signed manifest
+M=https://images.openimages.cloud/octavia-amphora/latest/MANIFEST.json
+V=$(curl -fsS $M | jq -r .version); F=$(curl -fsS $M | jq -r .filename)
+curl -fLO https://images.openimages.cloud/octavia-amphora/$V/$F
 ```
 
-The certificate identity points at the **reusable** DIB build workflow
-in `open-img-cloud/.github`: that's where GitHub's OIDC binds the SAN
-for keyless signing. To tie the artifact back to *this* repo's commit,
-also check `MANIFEST.json` (commit, build_url, builder digest).
+Use the image of your Octavia series: replace `latest/` with the series (e.g. `2025.2/`) and
+the file name follows the same pattern, `amphora-<series>-amd64-haproxy.qcow2`.
 
-## How to use (Octavia operators)
+<details>
+<summary><b>OpenStack (Octavia operators)</b></summary>
 
-Once published, point your Octavia controller at the qcow2 in Glance:
+Upload it to Glance with the tag Octavia looks up:
 
 ```sh
-# Pull the qcow2 (replace <V> with the OpenStack series, e.g. 2026.1)
-curl -fLO https://images.openimages.cloud/octavia-amphora/<V>/amphora-<V>-amd64-haproxy.qcow2
-
-# Upload to Glance with the amphora tag Octavia looks up
-openstack image create \
-    --disk-format qcow2 --container-format bare \
-    --tag amphora \
-    --file amphora-<V>-amd64-haproxy.qcow2 \
-    "amphora-<V>-amd64-haproxy"
-
-# Octavia will pick the latest image with the `amphora` tag at next
-# load-balancer provisioning. To force migration of existing LBs:
-#   openstack loadbalancer failover <lb_id>
+openstack image create --disk-format qcow2 --container-format bare \
+  --tag amphora \
+  --file "$F" "amphora-$V-amd64-haproxy"
 ```
 
-## Release flow
+Octavia picks the newest image carrying its amphora tag (`amp_image_tag` in `octavia.conf`,
+`amphora` here) when it creates an amphora. To move existing load balancers to the new image:
 
-1. Maintainer bumps `VERSION` to the target OpenStack series (no
-   `watch.yml` here: OpenStack ships every 6 months on a known
-   schedule, manual bump is fine).
-2. Tag `v<version>` triggers `release.yml`, which calls the shared
-   `build-dib-image.yml@main` reusable workflow.
-3. The reusable workflow runs `build/dib-build.sh` inside an
-   `ubuntu:24.04` container with `--privileged` (DIB needs loopback
-   mounts for debootstrap).
-4. The script clones `opendev.org/openstack/octavia` at
-   `stable/<version>` (falling back to `unmaintained/<version>`), installs its `diskimage-create/requirements.txt`
-   in a venv, then runs `diskimage-create.sh` with the matching
-   upper-constraints URL.
-5. Output qcow2 is signed (cosign keyless), bundled with MANIFEST,
-   uploaded to Infomaniak Object Storage, the Cloudflare cache for
-   `latest/` is purged and the catalog (`index.json`) is rebuilt.
-
-## Repository layout
-
-```
-VERSION                          single line, e.g. "2026.1"
-build/
-  dib-build.sh                   DIB build hook (out_dir as $1, version as $2)
-.github/workflows/
-  release.yml                    calls build-dib-image.yml on tag push
-  sync-latest.yml                points latest/ to an already published series
-.gitignore                       repo-local override for global build/ exclusion
-LICENSE                          GPL-2.0
+```sh
+openstack loadbalancer failover <lb_id>
 ```
 
-## Notes vs the OS-image repos
+</details>
 
-- **No cloud-init policy drop-in.** Amphora isn't bootable by end-users:
-  its userdata is consumed by the `amphora-agent` running inside the
-  image, not generic cloud-init. The `99_oic-policy.cfg` injection that
-  the libguestfs reusable does for OS images is irrelevant here.
-- **No smoke test.** Amphora boots into a constrained network namespace
-  driven by Octavia; the reusable `build-dib-image.yml` workflow
-  deliberately doesn't have a smoke step. Validation happens
-  post-deploy via Octavia's own health checks.
-- **Build container is `ubuntu:24.04`**, not the stackopshq libguestfs
-  image, because the ubuntu-minimal DIB element needs `debootstrap` +
-  apt deps. As a consequence `verify_builder: false`: we trust
-  Docker Hub's `ubuntu:24.04` here. This may tighten later if we ship
-  our own dib-builder image.
+<details>
+<summary><b>Verify the signature</b></summary>
 
-## Contributing
+```sh
+curl -fLO https://images.openimages.cloud/octavia-amphora/$V/$F.bundle
+cosign verify-blob "$F" --bundle "$F.bundle" \
+  --certificate-identity-regexp '^https://github.com/open-img-cloud/\.github/\.github/workflows/build-(libguestfs|dib|nix-flake|freebsd)-image\.yml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
 
-Fork, branch, PR. Keep the dib-build script focused on Octavia's
-upstream `diskimage-create.sh` invocation; complex env wiring should
-move to the workflow inputs rather than be hardcoded.
+The certificate identity is the shared DIB build workflow; `MANIFEST.json` ties the file to
+this repository's commit and build run.
+
+</details>
+
+## What this image is
+
+The image is what Octavia's `diskimage-create.sh` produces for the series, with its default
+`amphora-agent` and HAProxy elements, Ubuntu minimal noble, a 2 GB disk and the `ConfigDrive`
+cloud-init datasource. The build only adds what keeps older series rebuildable:
+
+- when `stable/<series>` is gone upstream, it builds from `unmaintained/<series>` and points
+  `octavia-lib` at the same branch;
+- `gpgv`, `gnupg2` and `ca-certificates` are included in the debootstrap base, which the
+  in-chroot `apt-get update` needs.
+
+Unlike the general-purpose images, it gets no openimages.cloud cloud-init policy: the
+amphora agent consumes the configuration Octavia injects.
+
+## How it is validated
+
+This image is **not boot-tested** by openimages.cloud: an amphora only works inside an Octavia
+deployment (its own network namespace, configuration and certificates pushed by the
+controller), so the shared OpenStack runtime contract does not apply. Each release is:
+
+- built from the pinned Octavia branch and upper-constraints, then checked to exist;
+- checksummed and signed with Sigstore cosign (keyless);
+- validated after publication from the CDN: `MANIFEST.json` and its required keys, sidecar
+  files, cache headers, size limit, and `cosign verify-blob` on the downloaded file.
+
+The functional check is Octavia's own amphora health monitoring once the image is deployed.
+
+## How releases happen
+
+There is no upstream watcher here: OpenStack ships a series every six months on a known
+schedule.
+
+1. A pull request bumps [`VERSION`](VERSION) to the new OpenStack series.
+2. Merging it is all it takes: `auto-release.yml` tags `v<VERSION>` and starts `release.yml`,
+   which builds, signs and publishes the image, then moves `latest/` to it.
+3. An older series can be rebuilt with `release.yml` (`workflow_dispatch`, `version` input):
+   `latest/` only follows the newest series. `sync-latest.yml` points `latest/` to an already
+   published series without rebuilding.
+
+The build runs `build/dib-build.sh` in a privileged `ubuntu:24.04` container on a
+GitHub-hosted runner (debootstrap needs full root capabilities). That container is not
+signed by this project, so the builder signature check of the other images is off here.
+
+This repository only holds what is specific to the amphora: [`VERSION`](VERSION),
+[`build/dib-build.sh`](build/dib-build.sh) and thin workflows calling the shared pipeline in
+[`open-img-cloud/.github`](https://github.com/open-img-cloud/.github).
 
 ## License
 
-Distributed under the GPL-2.0 License. See `LICENSE`.
-
-## Contact
-
-Kevin Allioli · kevin@stackops.ch · [@stackopshq](https://twitter.com/stackopshq)
-
-Project: [open-img-cloud/octavia-amphora](https://github.com/open-img-cloud/octavia-amphora)
-
-[octavia]: https://docs.openstack.org/octavia/
-[octavia-dic]: https://opendev.org/openstack/octavia/src/branch/master/diskimage-create
-[dib]: https://docs.openstack.org/diskimage-builder/
-[org]: https://github.com/open-img-cloud
-[shared]: https://github.com/open-img-cloud/.github
-[latest]: https://images.openimages.cloud/octavia-amphora/latest/
-
-<!-- shields -->
-[contributors-shield]: https://img.shields.io/github/contributors/open-img-cloud/octavia-amphora.svg?style=for-the-badge
-[contributors-url]: https://github.com/open-img-cloud/octavia-amphora/graphs/contributors
-[forks-shield]: https://img.shields.io/github/forks/open-img-cloud/octavia-amphora.svg?style=for-the-badge
-[forks-url]: https://github.com/open-img-cloud/octavia-amphora/network/members
-[stars-shield]: https://img.shields.io/github/stars/open-img-cloud/octavia-amphora.svg?style=for-the-badge
-[stars-url]: https://github.com/open-img-cloud/octavia-amphora/stargazers
-[issues-shield]: https://img.shields.io/github/issues/open-img-cloud/octavia-amphora.svg?style=for-the-badge
-[issues-url]: https://github.com/open-img-cloud/octavia-amphora/issues
-[license-shield]: https://img.shields.io/github/license/open-img-cloud/octavia-amphora.svg?style=for-the-badge
-[license-url]: https://github.com/open-img-cloud/octavia-amphora/blob/main/LICENSE
+The build tooling in this repository is under [GPL-2.0](LICENSE). The image content keeps its
+own licenses (Octavia and diskimage-builder are Apache-2.0, Ubuntu packages under their
+respective licenses). OpenStack is a trademark of the Open Infrastructure Foundation; this
+project is not affiliated with it.
