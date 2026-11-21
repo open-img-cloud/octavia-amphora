@@ -38,10 +38,14 @@ It is an **OpenStack control plane component**: Octavia boots it, tenants never 
 
 | OpenStack series | Codename | Octavia branch | Published |
 |---|---|---|---|
-| 2025.1 | Epoxy | unmaintained/2025.1 | yes |
+| 2025.1 | Epoxy | unmaintained/2025.1 | yes, frozen |
 | 2025.2 | Flamingo | stable/2025.2 | yes |
 | 2026.1 | Gazpacho | stable/2026.1 | yes |
 | 2026.2 | Hibiscus | stable/2026.2 | yes, `latest/` |
+
+A series that leaves upstream maintenance stays published as is: its files never change, so
+existing deployments keep working, but it is no longer rebuilt and the catalog marks it
+"unmaintained upstream". Upgrade Octavia to a maintained series to get new amphora builds.
 
 ## Quick start
 
